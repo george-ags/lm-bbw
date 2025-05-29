@@ -52,28 +52,24 @@ class FlowGraph:
         img = Image.new("RGBA", (self.x_pix, self.y_pix), "BLACK")
         draw = ImageDraw.Draw(img)
 
-        # 8g line
-        self.__draw_y_line(draw, 0, self.label_color)
         # 6g line
-        self.__draw_y_line(draw, self.y_pix * .25 - 2, self.line_color)
+        self.__draw_y_line(draw, 0, self.label_color)
         # 4g line
-        self.__draw_y_line(draw, self.y_pix / 2 - 2, self.line_color)
+        self.__draw_y_line(draw, self.y_pix * .33 - 2, self.line_color)
         # 2g line
-        self.__draw_y_line(draw, self.y_pix * .75 - 2, self.line_color)
+        self.__draw_y_line(draw, self.y_pix * .66 - 2, self.line_color)
         # 0g line
         self.__draw_y_line(draw, self.y_pix - 2, self.line_color)
 
         # data series line
         draw.line(points, fill=self.series_color, width=2)
 
-        # 8g label
-        draw.text((2, 0), "8", self.label_color, label_font)
         # 6g label
-        draw.text((2, self.y_pix * .25), "6", self.label_color, label_font)
+        draw.text((2, 0), "6", self.label_color, label_font)
         # 4g label
-        draw.text((2, self.y_pix * .5), "4", self.label_color, label_font)
+        draw.text((2, self.y_pix * .33), "4", self.label_color, label_font)
         # 2g label
-        draw.text((2, self.y_pix * .75), "2", self.label_color, label_font)
+        draw.text((2, self.y_pix * .66), "2", self.label_color, label_font)
 
         last_flow_rate = self.flow_data[-1] if len(self.flow_data) > 0 else 0
         fmt_flow = "{:0.1f}".format(last_flow_rate)
