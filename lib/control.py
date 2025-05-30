@@ -1,3 +1,4 @@
+import math
 import logging
 import time
 from collections import deque
@@ -51,13 +52,13 @@ class ControlManager:
 
         self.relay = DigitalOutputDevice(ControlManager.RELAY_GPIO)
 
-        self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True)
-        self.tgt_inc_button.when_pressed = self.__increment_target
-        self.tgt_inc_button.when_held = lambda: self.__increment_target(amount=1)
+        self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.1)
+        self.tgt_inc_button.when_released = lambda: self.__change_target(0.1)
+        self.tgt_inc_button.when_held = lambda: self.__change_target_held(1)
 
-        self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True)
-        self.tgt_dec_button.when_pressed = self.__decrement_target
-        self.tgt_dec_button.when_held = lambda: self.__decrement_target(amount=1)
+        self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.1)
+        self.tgt_dec_button.when_released = lambda: self.__change_target(-0.1)
+        self.tgt_dec_button.when_held = lambda: self.__change_target_held(-1)
 
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.1)
         self.paddle_switch.when_pressed = self.__start_shot
@@ -69,6 +70,7 @@ class ControlManager:
         self.memory_button.when_pressed = self.__rotate_memory
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
+        self.tgt_button_was_held = False
 
     def add_tare_handler(self, callback: Callable):
         self.tare_button.when_pressed = callback
@@ -102,11 +104,19 @@ class ControlManager:
         else:
             return self.relay_off_time - self.shot_timer_start
 
-    def __increment_target(self, amount=0.1):
-        self.memories[0].target += amount
+    def __change_target(self, amount):
+        if not self.tgt_button_was_held:
+            self.memories[0].target += amount
+        else:
+            self.tgt_button_was_held = False
 
-    def __decrement_target(self, amount=0.1):
-        self.memories[0].target -= amount
+    # change target to whole number, but don't jump past the nearest whole number
+    def __change_target_held(self, amount):
+        self.tgt_button_was_held = True
+        if amount > 0:
+            self.memories[0].target = math.floor(self.memories[0].target) + math.floor(amount)
+        if amount < 0:
+            self.memories[0].target = math.ceil(self.memories[0].target) + math.ceil(amount)
 
     def __rotate_memory(self):
         self.memories.rotate(-1)
