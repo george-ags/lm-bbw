@@ -4,7 +4,7 @@ import os.path
 import time
 import pandas as pd
 from datetime import datetime
-from enum import Enum, StrEnum, auto
+from enum import Enum
 from multiprocessing import Process, Queue
 from typing import Optional
 
@@ -108,9 +108,25 @@ class DisplaySize(Enum):
     SIZE_2_4 = 1
     SIZE_2_0 = 2
 
-class DisplayOrientation(StrEnum):
-    PORTRAIT = auto()
-    LANDSCAPE = auto()
+# Workaround for StrEnum not in 3.9. Should move to virtual env for managing versions consistently
+class DisplayOrientation(str, Enum):
+    PORTRAIT = "PORTRAIT"
+    LANDSCAPE = "LANDSCAPE"
+
+    @classmethod
+    def _missing_(cls, value):
+        """
+        Handles case-insensitive lookup for enum members.
+        This is called when DisplayOrientation('some_value') doesn't find an exact match.
+        """
+        if isinstance(value, str):
+            # Convert the input string to uppercase for comparison
+            value_upper = value.upper()
+            for member in cls:
+                # Compare the uppercased input with the (already uppercase) member values
+                if member.value == value_upper:
+                    return member
+        return None
 
 class Display:
     def __init__(self, data_queue: Queue, display_size: DisplaySize = DisplaySize.SIZE_2_0, image_save_dir: str = None):
