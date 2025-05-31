@@ -1,5 +1,6 @@
 import math
 import logging
+import pickle
 import time
 from collections import deque
 from timeit import default_timer as timer
@@ -12,7 +13,7 @@ from lib.pyacaia import AcaiaScale
 
 default_target = 50.0
 default_overshoot = 2.0
-
+memory_save_file = "memory.save"
 
 class TargetMemory:
     def __init__(self, name: str, color="#ff1303"):
@@ -45,10 +46,10 @@ class ControlManager:
     def __init__(self, max_flow_points=500):
         self.flow_rate_data = deque([])
         self.flow_rate_max_points = max_flow_points
-        self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
         self.relay_off_time = timer()
         self.shot_timer_start: Optional[float] = None
         self.image_needs_save = False
+        self.load_memory()
 
         self.relay = DigitalOutputDevice(ControlManager.RELAY_GPIO)
 
@@ -72,6 +73,22 @@ class ControlManager:
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
         self.tgt_button_was_held = False
 
+    def save_memory(self):
+        try:
+            with open(memory_save_file, 'wb') as savefile:
+                pickle.dump(self.memories, savefile)
+                logging.info("Saved shot data to memory")
+        except Exception as e:
+            logging.error("Error persisting memory: %s" % e)
+
+    def load_memory(self):
+        try:
+            with open(memory_save_file, 'rb') as savefile:
+                self.memories = pickle.load(savefile)
+        except Exception as e:
+            logging.warn("Not able to load memory from save, resetting memory to defaults. Error was: %s" % e)
+            self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
+
     def add_tare_handler(self, callback: Callable):
         self.tare_button.when_pressed = callback
 
@@ -92,6 +109,7 @@ class ControlManager:
         if self.relay_on():
             self.relay_off_time = timer()
             self.relay.off()
+            self.save_memory()
 
     def current_memory(self):
         return self.memories[0]
