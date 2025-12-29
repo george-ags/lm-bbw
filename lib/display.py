@@ -208,13 +208,13 @@ class Display:
             if data is None:
                 continue
 
-            if data.weight is None:
-                logging.error("Skipping display redraw because weight value is missing")
-                continue
-
+            # --- FIX: Don't block if battery/weight is missing ---
             if data.battery is None:
-                logging.error("Skipping display redraw because battery value is missing")
-                continue
+                data.battery = 0
+            
+            if data.weight is None:
+                data.weight = 0.0
+            # -----------------------------------------------------
 
             img = None
             if self.display_orientation == DisplayOrientation.PORTRAIT:
