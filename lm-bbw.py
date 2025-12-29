@@ -18,14 +18,15 @@ from lib.pyacaia import AcaiaScale
 from lib.webserver import WebServer
 
 WEB_PORT = 80
-WEB_DIR = '/opt/apollo/web'
+WEB_DIR = '/opt/lm-bbw/web'
 MIN_GOOD_SHOT_DURATION = 10
+MAC_SAVE_FILE = '/opt/lm-bbw/mac.save' # File to store the scale address
 
 stop = False
 overshoot_update_executor = ThreadPoolExecutor(max_workers=1)
 
 logLevel = os.environ.get('LOGLEVEL', 'INFO').upper()
-logPath = os.environ.get('LOGFILE', '/var/log/apollo.log')
+logPath = os.environ.get('LOGFILE', '/var/log/lm-bbw.log')
 
 refreshRate = float(os.environ.get('REFRESH_RATE', '0.1'))
 smoothing = round(1 / refreshRate)
@@ -41,6 +42,27 @@ logging.basicConfig(
     handlers=handlers
 )
 
+# --- MAC PERSISTENCE HELPERS ---
+def save_mac_address(mac):
+    try:
+        with open(MAC_SAVE_FILE, 'w') as f:
+            f.write(mac)
+            logging.info(f"Saved Scale MAC {mac} to disk")
+    except Exception as e:
+        logging.error(f"Failed to save MAC: {e}")
+
+def load_last_mac():
+    try:
+        if os.path.exists(MAC_SAVE_FILE):
+            with open(MAC_SAVE_FILE, 'r') as f:
+                mac = f.read().strip()
+                if len(mac) > 10: # Simple validation
+                    logging.info(f"Loaded Last Known MAC: {mac}")
+                    return mac
+    except Exception as e:
+        logging.error(f"Failed to load MAC: {e}")
+    return None
+# -------------------------------
 
 def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < MIN_GOOD_SHOT_DURATION:
@@ -54,6 +76,10 @@ def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
 
 
 def check_target_disable_relay(scale: AcaiaScale, mgr: ControlManager):
+    # Grace Period: Ignore weight checks for the first 1.5 seconds.
+    if mgr.shot_time_elapsed() < 1.5:
+        return
+
     if mgr.relay_on() and scale.weight > mgr.current_memory().target_minus_overshoot():
         mgr.disable_relay()
         overshoot_update_executor.submit(update_overshoot, scale, mgr)
@@ -69,22 +95,62 @@ def main():
     display = Display(display_data_queue, display_size=DisplaySize.SIZE_2_0, image_save_dir=WEB_DIR)
     display.start()
 
-    # we need enough data points to capture 60s shot
     mgr = ControlManager(max_flow_points=round(60 / refreshRate))
     scale = AcaiaScale(mac='')
+
+    # --- AUTO-CONNECT LOGIC ---
+    # Pre-load the discovered_mac so the ControlManager tries to connect immediately
+    # without waiting for a scan.
+    last_mac = load_last_mac()
+    if last_mac:
+        mgr.discovered_mac = last_mac
+    # --------------------------
 
     mgr.add_tare_handler(lambda channel: scale.tare())
 
     last_sample_time: Optional[float] = None
     last_weight: Optional[float] = None
+    
+    last_relay_state = False
+    shot_started_with_scale = False
+
     while not stop:
-        if control.try_connect_scale(scale, mgr):
+        is_connected = control.try_connect_scale(scale, mgr)
+        
+        # If we successfully connected, verify we have the MAC saved
+        if is_connected and scale.mac and scale.mac != last_mac:
+            save_mac_address(scale.mac)
+            last_mac = scale.mac
+
+        relay_is_on = mgr.relay_on()
+
+        # 1. Detect the moment the shot starts (Rising Edge)
+        if relay_is_on and not last_relay_state:
+            shot_started_with_scale = is_connected
+            if shot_started_with_scale:
+                logging.info("Shot Started in GRAVIMETRIC Mode")
+            else:
+                logging.info("Shot Started in MANUAL Mode (Scale not ready)")
+
+        # 2. Handle the shot
+        if is_connected:
             check_target_disable_relay(scale, mgr)
+        
+        elif relay_is_on:
+            if shot_started_with_scale:
+                logging.warning("LOST SCALE CONNECTION DURING SHOT - EMERGENCY STOP")
+                mgr.disable_relay()
+            else:
+                pass # Manual Mode
+        
+        last_relay_state = relay_is_on
+
         if scale is not None and scale.connected:
             (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight)
         else:
             display.display_off()
         time.sleep(refreshRate)
+        
     if scale.connected:
         try:
             scale.disconnect()
