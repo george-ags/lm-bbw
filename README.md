@@ -1,7 +1,12 @@
-# LM-BBW (brew-by-weight) for LM Micra/Acaia Lunar
+# LM-BBW (brew-by-weight) for La Marzocco Linea Micra machine & Acaia Lunar scale
+
+This given work is forked and based on Marcus Sorensen's "apollo" project 
+(https://github.com/mlsorensen/apollo) - with big thanks and high appreciation !
 
 LM-BBW helps land espresso on your Lunar scale. This project adds brew-by-weight and a small controller 
 for La Marzocco Micra with Acaia Lunar. It may also work with other Acaia Bluetooth scales like Pyxis. 
+
+I should fully rewrite some files (like control.py and pyacaia.py to port it to Debian 12/13+ with some improvements)
 
 This project is more about scale integration than Micra integration. It cannot do flow profiling or other advanced 
 control over the Micra, it is simply collecting data from the scale and acting as a proxy for the paddle switch.
