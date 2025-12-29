@@ -1,7 +1,6 @@
+# LM-BBW (brew-by-weight) for LM Micra/Acaia Lunar
 
-# Apollo for LM Micra/Acaia Lunar
-
-Apollo helps land espresso on your Lunar scale. This project adds brew-by-weight and a small controller 
+LM-BBW helps land espresso on your Lunar scale. This project adds brew-by-weight and a small controller 
 for La Marzocco Micra with Acaia Lunar. It may also work with other Acaia Bluetooth scales like Pyxis. 
 
 This project is more about scale integration than Micra integration. It cannot do flow profiling or other advanced 
@@ -17,7 +16,7 @@ suggest forking and making it your own.
 I've added support for the Acaia Umbra scale, which is very similar to the Lunar scale, but it lacks a display and onboard
 controls. This is ideal for integrations. Aside from being much less expensive. it is a bonus not to have to deal with 
 accidentally touching controls. The full blank slab is also nice aesthetically.  Additionally, it has a "sleep" mode. This 
-enables Apollo to just connect to the scale when needed, and the scale will go to sleep when disconnected - you don't need 
+enables LM-BBW to just connect to the scale when needed, and the scale will go to sleep when disconnected - you don't need 
 to touch the scale at all except occasionally to charge or clean it!
 
 To accomodate this I've made one fundamental adjustment. I've comandeered the "target lock" toggle switch to become a 
@@ -30,9 +29,9 @@ This is a part of an effort to build a nicer enclosure, building the device into
 wiring and setup below still applies, with the exception of printing a new top panel and using 8mm push switches in place
 of the toggle switch to select target weight.
 
-![image](./doc/apollo-top-cover.png)
+![image](./doc/lm-bbw-top-cover.png)
 
-The "Apollo top cover" 3d printing models are in the doc folder.
+The "LM-bbw top cover" 3d printing models are in the doc folder.
 
 In my setup I migrated from the Pi Zero 2W to the Raspberry Pi 5, which is overkill CPU-wise and I actually underclock to
 1600MHz, but it gives smoother frame rates. I'm sure a Pi 4 or 3 would work too. I use the lite Raspbian image since we 
@@ -47,10 +46,10 @@ I haven't seen the top exceed 42C.
 I have replaced the top cover screws with M4-0.7 screws made of non-stainless and added 10mm magnets into the top
 cover to hold it in place without visible fasteners.
 
-![image](./doc/apollo-top-cover-wiring.png)
+![image](./doc/lm-bbw-top-cover-wiring.png)
 
 ## Configuration variables
-There are some new variables to control framerates and display orientation at `/etc/default/apollo`, documented in the
+There are some new variables to control framerates and display orientation at `/etc/default/lm-bbw`, documented in the
 comments of this file (aka `service/env` in this repo).
 
 ## Hardware
@@ -123,7 +122,7 @@ perhaps another device).
 
 ### Enclosure
 
-The enclosure STL file can be found [here](doc/Apollo_2inch_v2.stl). It may need fine tuning, depending on the accuracy
+The enclosure STL file can be found [here](doc/LM-bbw_2inch_v2.stl). It may need fine tuning, depending on the accuracy
 and tolerances of your printer.
 
 ![image](./doc/enclosure-front.png)
@@ -161,10 +160,19 @@ The SPI bus must be enabled to drive this display. Log into your Pi and run the 
 ```commandline
 sudo raspi-config
 ```
+
 Choose Interfacing Options -> SPI -> Yes  to enable the SPI interface
 
-Next, we want to release memory from the GPU for system use. Still in `raspi-config`, under Performance -> GPU Memory limit 
-set to 16M.
+Next, we want to release memory from the GPU for system use and thus change / set it to 16M.
+(Note in Debian 11 it was in `raspi-config`, under Performance -> GPU Memory limit)
+```commandline
+sudo nano /boot/firmware/config.txt
+```
+
+Scroll to the bottom of the file and add, or modify, (best is under section [all]) the following line:
+```commandline
+gpu_mem=16
+```
 
 Finally, we want to disable the login UI. Under System Options -> Boot / Auto Login choose "Console" 
 
@@ -176,26 +184,85 @@ sudo reboot
 
 ```commandline
 sudo apt install python3-pandas python3-pip libglib2.0-dev git
-sudo pip3 install bluepy
+sudo pip3 install bleak --break-system-packages
 ```
 
-#### Apollo Software
-TODO: DEB package or install script
+#### LM-BBW Software Installation and Activation
 
-```commandline
-git clone https://github.com/mlsorensen/apollo.git
-cd apollo
-sudo mkdir -p /opt/apollo/web
-sudo cp -r apollo.py lib /opt/apollo
-sudo chmod +x /opt/apollo/apollo.py
-sudo cp service/apollo.service /etc/systemd/system
-sudo cp service/env /etc/default/apollo
+```
+git clone https://github.com/george-ags/lm-bbw.git
+cd lm-bbw
+sudo mkdir -p /opt/lm-bbw/web
+sudo cp -r lm-bbw.py lib /opt/lm-bbw
+sudo chmod +x /opt/lm-bbw/lm-bbw.py
+sudo cp service/lm-bbw.service /etc/systemd/system
+sudo cp service/env /etc/default/lm-bbw
 sudo systemctl daemon-reload
-sudo systemctl enable --now apollo
+sudo systemctl enable --now lm-bbw
 ```
 
 By default, the software scans for any Lunar device in the vicinity and connects to it. There is no simple
 way to set a specific scale MAC address yet.
+
+#### If it FAILS to start
+ - check in Journalctl if Bluetooth adapter is found and it's powered On:
+```commandline
+bluetoothctl show
+```
+You should see Powered: yes.
+
+If you have an issue follow the following steps:
+##### Enable Bluetooth adapter
+
+Clear the "Saved" Block State
+Linux remembers if you turned Bluetooth off previously and restores that state on boot. You need to clear this memory.
+
+Run these commands one by one:
+
+Unblock everything physically and via software
+```commandline
+sudo rfkill unblock all
+```
+
+Force the bluetooth service to start
+```commandline
+sudo systemctl enable bluetooth
+sudo systemctl start bluetooth
+```
+
+Force power on via the control tool
+```commandline
+sudo bluetoothctl power on
+```
+
+Add a "Force ON" Boot Rule (The Fix) - add a hardware rule that forces the power ON the moment the chip wakes up.
+Create a new udev rule file:
+```commandline
+sudo nano /etc/udev/rules.d/10-local.rules
+```
+Paste this exact line into the file:
+```commandline
+ACTION=="add", KERNEL=="hci0", RUN+="/usr/bin/bluetoothctl power on"
+```
+Save and exit
+
+Reboot the Pi:
+
+```commandline
+sudo reboot
+```
+
+Verify
+After the reboot, wait 30 seconds and run:
+```commandline
+bluetoothctl show
+```
+You should see Powered: yes.
+
+If it still says Powered: no: It means the UART driver for the Pi is failing to load. Check the status of the hardware attachment service and try to troubleshoot:
+```commandline
+sudo systemctl status hciuart
+```
 
 ## Software Development
 
