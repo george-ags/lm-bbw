@@ -379,29 +379,31 @@ class AcaiaScale(object):
                 await self._client.stop_notify(self.char_uuid)
             except:
                 pass 
-                
+
             await self._client.start_notify(self.char_uuid, self._notification_handler)
             logging.info(f"Subscribed to {self.char_uuid}")
         except Exception as e:
             logging.error(f"Failed to subscribe to notifications: {e}")
 
     async def _send_handshake(self):
-        logging.info("Performing Handshake (Double-Tap)...")
-        # --- FIX: Send standard writes (no response) but repeat notification req ---
-        
-        # 1. Send ID
+        logging.info("Performing Handshake (Double-Tap with Extended Delays)...")
+
+        # 1. Send ID (Identify)
         await self._write_async(encodeId(self.isPyxisStyle))
-        await asyncio.sleep(0.2)
-        
-        # 2. Notification Request (Double Tap to ensure scale wakes up)
+        await asyncio.sleep(0.4) # Increased delay
+
+        # 2. Notification Request (Double Tap)
+        # Send first request
         await self._write_async(encodeNotificationRequest())
-        await asyncio.sleep(0.25) # Small gap
+        await asyncio.sleep(0.5) # Extended gap to ensure processing
+
+        # Send second request (The "Double Tap")
         await self._write_async(encodeNotificationRequest())
-        await asyncio.sleep(0.2)
-        
+        await asyncio.sleep(0.3)
+
         # 3. Heartbeat
         await self._write_async(encodeHeartbeat())
-        
+
         logging.info("Handshake Complete")
 
     def _notification_handler(self, sender, data):
@@ -410,7 +412,7 @@ class AcaiaScale(object):
             (msg, self.packet) = decode(self.packet)
             if not msg:
                 break
-            
+
             if isinstance(msg, Settings):
                 self.battery = msg.battery
                 self.units = msg.units
