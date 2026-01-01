@@ -1,17 +1,17 @@
 import logging
 import math
-import os.path
+import os
 import time
 import sys
+import traceback
 import pandas as pd
 from datetime import datetime
 from enum import Enum
 from multiprocessing import Process, Queue
+from queue import Empty
 from typing import Optional
 
 from PIL import Image, ImageFont, ImageDraw
-
-from lib.control import TargetMemory
 
 # Font Loading
 try:
@@ -50,30 +50,21 @@ class FlowGraph:
         for y in self.flow_data:
             x_coord = i * self.x_pix_interval if i * self.x_pix_interval < self.x_pix else self.x_pix
             y_coord = y * self.y_pix_interval + 2 if y * self.y_pix_interval < self.y_pix else self.y_pix
-            # flip Y value because zero is at top of image
             y_coord = abs(y_coord - self.y_pix)
             points.append((x_coord, y_coord))
             i += 1
         img = Image.new("RGBA", (self.x_pix, self.y_pix), "BLACK")
         draw = ImageDraw.Draw(img)
 
-        # 6g line
         self.__draw_y_line(draw, 0, self.label_color)
-        # 4g line
         self.__draw_y_line(draw, self.y_pix * .33 - 2, self.line_color)
-        # 2g line
         self.__draw_y_line(draw, self.y_pix * .66 - 2, self.line_color)
-        # 0g line
         self.__draw_y_line(draw, self.y_pix - 2, self.line_color)
 
-        # data series line
         draw.line(points, fill=self.series_color, width=2)
 
-        # 6g label
         draw.text((2, 0), "6", self.label_color, label_font)
-        # 4g label
         draw.text((2, self.y_pix * .33), "4", self.label_color, label_font)
-        # 2g label
         draw.text((2, self.y_pix * .66), "2", self.label_color, label_font)
 
         last_flow_rate = self.flow_data[-1] if len(self.flow_data) > 0 else 0
@@ -90,7 +81,7 @@ class FlowGraph:
 
 
 class DisplayData:
-    def __init__(self, weight: float, sample_rate: float, memory: TargetMemory, flow_data: list, battery: int,
+    def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
                  flow_smooth_factor: int = 8):
         self.weight = weight
@@ -132,7 +123,7 @@ class Display:
         self.display_size = display_size
         self.image_save_dir = image_save_dir
         self.display_orientation = DisplayOrientation(os.environ.get('DISPLAY_ORIENTATION', DisplayOrientation.PORTRAIT))
-
+        
         self.lcd = None
         self.on = True
         self.process = None
@@ -145,7 +136,6 @@ class Display:
         if self.process is not None:
             self.process.kill()
         self.display_off()
-        # Module exit handled inside process if needed, or by OS
 
     def display_off(self):
         pass
@@ -170,137 +160,134 @@ class Display:
             logging.error("Failed to save image: %s", str(ex))
 
     def __update_display(self):
-        # Initialize Hardware inside the process
-        from lib import LCD_2inch4, LCD_2inch
-        if self.display_size == DisplaySize.SIZE_2_4:
-            self.lcd = LCD_2inch4.LCD_2inch4()
-        elif self.display_size == DisplaySize.SIZE_2_0:
-            self.lcd = LCD_2inch.LCD_2inch()
-        else:
-            raise Exception("unknown display size configured: %s" % self.display_size.name)
+        # Hardware init
+        try:
+            from lib import LCD_2inch4, LCD_2inch
+            if self.display_size == DisplaySize.SIZE_2_4:
+                self.lcd = LCD_2inch4.LCD_2inch4()
+            elif self.display_size == DisplaySize.SIZE_2_0:
+                self.lcd = LCD_2inch.LCD_2inch()
+            else:
+                raise Exception("unknown display size configured: %s" % self.display_size.name)
+            
+            self.lcd.Init()
+            self.lcd.clear()
+            
+            # --- CLEAN STARTUP: Force Black Frame ---
+            w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
+            img = Image.new("RGBA", (w, h), "BLACK")
+            self.lcd.ShowImage(img, 0, 0)
+            
+            logging.info("Display Hardware Initialized (Clean Start)")
+        except Exception as e:
+            logging.error(f"Display Hardware Init Failed: {e}")
+            return
 
-        self.lcd.Init()
-        self.lcd.clear()
-        self.lcd.bl_DutyCycle(50)
+        screen_is_on = False
 
         while True:
-            if self.data_queue.qsize() == 0:
-                time.sleep(.1)
-                continue
+            try:
+                # Wait for data for 2 seconds. If none comes, raise Empty exception.
+                data = self.data_queue.get(timeout=2.0)
+                
+                # Wake up logic
+                if not screen_is_on:
+                    self.lcd.bl_DutyCycle(50)
+                    screen_is_on = True
 
-            data: Optional[DisplayData] = None
-            while self.data_queue.qsize() > 0:
-                data = self.data_queue.get()
+                if data.battery is None:
+                    data.battery = 0
+                if data.weight is None:
+                    data.weight = 0.0
 
-            if data is None:
-                continue
+                w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
+                
+                img = draw_frame(w, h, data, self.display_orientation)
 
-            if data.battery is None:
-                data.battery = 0
-            if data.weight is None:
-                data.weight = 0.0
+                if data.save_image and img is not None:
+                    self.save_image(img)
+                self.lcd.ShowImage(img, 0, 0)
+                
+            except Empty:
+                # --- AUTO-SLEEP LOGIC FIXED ---
+                if screen_is_on:
+                    # 1. Turn off backlight first (Hide the transition)
+                    self.lcd.bl_DutyCycle(0)
+                    
+                    # 2. Force Draw BLACK to wipe video memory (Fixes "White Rectangle/Old Data")
+                    w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
+                    black_img = Image.new("RGBA", (w, h), "BLACK")
+                    self.lcd.ShowImage(black_img, 0, 0)
+                    
+                    screen_is_on = False
 
-            # --- OPTIMIZED CALL ---
-            # 1. Determine dimensions based on orientation (Swap for Landscape)
-            w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
+            except Exception as e:
+                logging.error(f"CRASH IN DISPLAY LOOP: {e}")
+                traceback.print_exc()
+                time.sleep(1)
 
-            # 2. Single function call
-            img = draw_frame(w, h, data, self.display_orientation)
-            # ----------------------
-
-            if data.save_image and img is not None:
-                self.save_image(img)
-            self.lcd.ShowImage(img, 0, 0)
 
 def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation) -> Image:
     # --- 1. CONFIGURATION ---
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
-
-    # Layout Constants
+    
     if is_landscape:
         header_h = 72
         col_w = 106
         graph_y = 72
         ready_y = 120
-        # In landscape, battery is in the 3rd column of the header
         has_header_batt = True
     else:
         header_h = 96
         col_w = 120
         graph_y = 98
         ready_y = 164
-        # In portrait, battery is in the footer
         has_header_batt = False
-
-    # Background Logic (Landscape changes BG on paddle)
+        
     background = bg_color
     if is_landscape and data.paddle_on:
         background = light_bg_color
-
+        
     img = Image.new("RGBA", (width, height), background)
     draw = ImageDraw.Draw(img)
 
     # --- 2. GRID LINES ---
-    # Header horizontal line
     draw.line([(0, header_h), (width, header_h)], fill=fg_color, width=2)
-
-    # Header vertical separators
     draw.line([(col_w, 0), (col_w, header_h)], fill=fg_color, width=2)
     if is_landscape:
-        # Landscape has a second vertical separator for battery column
         draw.line([(col_w * 2, 0), (col_w * 2, header_h)], fill=fg_color, width=2)
-
-    # Footer horizontal line
-    # (Note: Original code had 285, but standard 2inch screens are usually 240 or 320 px.
-    #  If height is 240, 285 is off-screen. We keep it to preserve original logic/layout for Portrait 320h)
     draw.line([(0, 285), (240, 285)], fill=fg_color, width=2)
 
     # --- 3. LABELS ---
-    # Col 1: Weight
-    # Adjustment: Landscape X=10, Portrait X=16. Y=8 vs 16.
     lbl_x = 10 if is_landscape else 16
     lbl_y = 8 if is_landscape else 16
     draw.text((lbl_x, lbl_y), "weight(g)", fg_color, label_font)
-
-    # Col 2: Target
-    # Adjustment: Landscape X=118, Portrait X=130
+    
     lbl_x = 118 if is_landscape else 130
     draw.text((lbl_x, lbl_y), "target %s(g)" % data.memory.name, fg_color, label_font)
 
-    # Col 3 (Landscape only): Battery Label
     if has_header_batt:
         draw.text((234, 8), "battery", fg_color, label_font)
 
     # --- 4. VALUES ---
-    # Weight Value (Col 1)
     fmt_weight = "{:0.1f}".format(data.weight)
     w = draw.textlength(fmt_weight, value_font_lg)
     h = value_font_lg.size
-    # Center in col 1: (col_w - w)/2
-    # Center vertically in header: (header_h + offset - h)/2
-    # Original used manual offsets (108 vs 88). We approximate centered.
     draw.text(((col_w - w) / 2, (header_h + 12 - h) / 2), fmt_weight, fg_color, value_font_lg)
 
-    # Target Value (Col 2)
     fmt_target = "{:0.1f}".format(data.memory.target)
     target_font = value_font_lg
     w = draw.textlength(fmt_target, target_font)
     h = target_font.size
-    # Center in col 2: col_w + (col_w - w)/2
     draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, fg_color, target_font)
 
-    # Battery Value (Location depends on orientation)
     fmt_batt = "%d%%" % data.battery
     if has_header_batt:
-        # Landscape: Header Col 3
         w = draw.textlength(fmt_batt, value_font_lg)
-        # Center in col 3 (approx start 212)
         draw.text(((col_w - w)/2 + (col_w * 2) + 2, (header_h + 16 - h) / 2), fmt_batt, fg_color, value_font_lg)
     else:
-        # Portrait: Footer
         draw.text((124, 294), "battery:%s" % fmt_batt, fg_color, label_font)
-
-    # Footer Paddle (Portrait only)
+        
     if not is_landscape:
         paddle_value = "ON" if data.paddle_on else "OFF"
         draw.text((8, 294), "paddle:%s" % paddle_value, fg_color, label_font)
@@ -309,51 +296,35 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     fmt_ready = "Ready"
     w = draw.textlength(fmt_ready, value_font_lg)
     h = value_font_lg.size
-
-    # Calculate box rect centered on screen width
-    # Portrait center ~120, Landscape center ~160
     center_x = width // 2
-
-    # Draw Box
-    draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h + 4),
+    
+    draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h + 4), 
                    bg_color, data.memory.color, 4)
-    # Draw Text
     draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
 
     # --- 6. GRAPH / TIMER ---
     if data.flow_data is not None and len(data.flow_data) > 0:
         flow_rate_data = data.flow_rate_moving_avg()
-
-        # Determine Graph Size
+        
         if is_landscape:
             g_w, g_h = 320, 132
             timer_y = 208
             timer_font = label_font_lg
         else:
-            g_w, g_h = 240, 160 # Default FlowGraph size
+            g_w, g_h = 240, 160
             timer_y = 262
             timer_font = label_font
 
-        # Draw Graph
-        # Note: We create a new FlowGraph instance with specific dimensions
         flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
         img.paste(flow_image, (0, graph_y))
-
-        # Draw Timer/Axis Info
+        
         last_sample_time = data.sample_rate * float(len(data.flow_data))
-
-        # Bottom left time (Total duration)
-        # L: y=212, P: y=262
         axis_y = timer_y + 4 if is_landscape else timer_y
         draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
-
-        # Bottom right time (0s)
         draw.text((width - 22, axis_y), "0s", fg_color, label_font)
 
-        # Centered Timer
         fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
         w = draw.textlength(fmt_shot_time, timer_font)
         draw.text(((width - w) / 2, timer_y), fmt_shot_time, fg_color, timer_font)
 
     return img
-
