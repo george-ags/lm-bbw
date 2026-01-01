@@ -41,7 +41,7 @@ def draw_battery(draw, xy, level, scale=1.0):
     else: fill_color = "GREEN"
 
     #draw.rectangle((x, y, x + w, y + h), outline="WHITE", width=2)
-    draw.rectangle((x, y, x + w, y + h), outline=fill_color, width=2)
+    draw.rectangle((x, y, x + w, y + h), outline=fill_color, fill=bg_color, width=2)
     
     term_y_start = y + int(h * 0.25)
     term_y_end = y + int(h * 0.75)
@@ -68,12 +68,13 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     
     # Draw Track Outline
     #draw.rectangle((x, y, x + w, y + h), outline=color, width=2)
-    draw.rectangle((x, y, x + w, y + h), outline=fg_color, width=2)
+    draw.rectangle((x, y, x + w, y + h), outline=fg_color, fill=bg_color, width=2)
     
     if is_on:
         # ON: Fill track with color, knob is black (contrast)
-        draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=color)
-        knob_color = "BLACK" 
+        ##draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=color)
+        ##knob_color = "BLACK"
+        knob_color = color
         knob_x = x + w - padding - knob_dia
     else:
         # OFF: Empty track, knob is outline or solid color
@@ -358,7 +359,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
 
         # Determine Color and State
         if data.paddle_on:
-            p_color = "CYAN" 
+            p_color = "BLUE" 
         else:
             p_color = "RED"
         
