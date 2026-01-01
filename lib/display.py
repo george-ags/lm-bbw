@@ -28,6 +28,64 @@ bg_color = "BLACK"
 light_bg_color = "DIMGREY"
 fg_color = "WHITE"
 
+# --- HELPER: Draw Battery Icon ---
+def draw_battery(draw, xy, level, scale=1.0):
+    x, y = xy
+    w = int(24 * scale)
+    h = int(12 * scale)
+    terminal_w = int(3 * scale)
+    padding = 2
+    
+    if level < 20: fill_color = "RED"
+    elif level < 50: fill_color = "YELLOW"
+    else: fill_color = "GREEN"
+
+    #draw.rectangle((x, y, x + w, y + h), outline="WHITE", width=2)
+    draw.rectangle((x, y, x + w, y + h), outline=fill_color, width=2)
+    
+    term_y_start = y + int(h * 0.25)
+    term_y_end = y + int(h * 0.75)
+    #draw.rectangle((x + w, term_y_start, x + w + terminal_w, term_y_end), fill="WHITE")
+    draw.rectangle((x + w, term_y_start, x + w + terminal_w, term_y_end), fill=fill_color)
+    
+    max_fill_w = w - (padding * 2)
+    current_fill_w = int(max_fill_w * (level / 100.0))
+    if level > 0 and current_fill_w < 1: current_fill_w = 1
+        
+    if current_fill_w > 0:
+        draw.rectangle((x + padding, y + padding, x + padding + current_fill_w, y + h - padding), fill=fill_color)
+
+# --- HELPER: Draw Paddle/Toggle Switch ---
+def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
+    """
+    Draws a toggle switch with dynamic color.
+    """
+    x, y = xy
+    w = int(36 * scale)
+    h = int(18 * scale)
+    padding = 2
+    knob_dia = h - (padding * 2)
+    
+    # Draw Track Outline
+    #draw.rectangle((x, y, x + w, y + h), outline=color, width=2)
+    draw.rectangle((x, y, x + w, y + h), outline=fg_color, width=2)
+    
+    if is_on:
+        # ON: Fill track with color, knob is black (contrast)
+        draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=color)
+        knob_color = "BLACK" 
+        knob_x = x + w - padding - knob_dia
+    else:
+        # OFF: Empty track, knob is outline or solid color
+        knob_color = color
+        knob_x = x + padding
+
+    # Draw Knob
+    knob_y = y + padding
+    draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color)
+
+# ---------------------------------------------
+
 class FlowGraph:
     def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=8,
                  width_pixels=240, height_pixels=160):
@@ -209,16 +267,13 @@ class Display:
                 self.lcd.ShowImage(img, 0, 0)
                 
             except Empty:
-                # --- AUTO-SLEEP LOGIC FIXED ---
+                # --- AUTO-SLEEP LOGIC ---
                 if screen_is_on:
-                    # 1. Turn off backlight first (Hide the transition)
                     self.lcd.bl_DutyCycle(0)
-                    
-                    # 2. Force Draw BLACK to wipe video memory (Fixes "White Rectangle/Old Data")
+                    # Force Draw BLACK to wipe video memory
                     w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                     black_img = Image.new("RGBA", (w, h), "BLACK")
                     self.lcd.ShowImage(black_img, 0, 0)
-                    
                     screen_is_on = False
 
             except Exception as e:
@@ -245,7 +300,6 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         has_header_batt = False
         
     background = bg_color
-    #if is_landscape and data.paddle_on:
     if data.paddle_on:
         background = light_bg_color
         
@@ -268,8 +322,8 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     draw.text((lbl_x, lbl_y), "target %s(g)" % data.memory.name, fg_color, label_font)
 
     if has_header_batt:
-        draw.text((234, 8), "battery", fg_color, label_font)
-
+        draw_battery(draw, (253, 10), data.battery, scale=1.0)
+    
     # --- 4. VALUES ---
     fmt_weight = "{:0.1f}".format(data.weight)
     w = draw.textlength(fmt_weight, value_font_lg)
@@ -282,18 +336,40 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     h = target_font.size
     draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, fg_color, target_font)
 
+    # Battery Value Display
     fmt_batt = "%d%%" % data.battery
     if has_header_batt:
         w = draw.textlength(fmt_batt, value_font_lg)
         draw.text(((col_w - w)/2 + (col_w * 2) + 2, (header_h + 16 - h) / 2), fmt_batt, fg_color, value_font_lg)
     else:
-        draw.text((124, 294), "battery:%s" % fmt_batt, fg_color, label_font)
+        # Portrait: Footer - Aligned to Right Edge
+        w_text = draw.textlength(fmt_batt, label_font)
+        padding_right = 8
+        icon_width = 27 
+        icon_x = width - padding_right - icon_width
+        text_x = icon_x - 4 - w_text
         
+        draw_battery(draw, (icon_x, 296), data.battery, scale=1.0)
+        draw.text((text_x, 294), fmt_batt, fg_color, label_font)
+        
+    # --- 5. PADDLE ICON AND TEXT ---
     if not is_landscape:
-        paddle_value = "ON" if data.paddle_on else "OFF"
-        draw.text((8, 294), "paddle:%s" % paddle_value, fg_color, label_font)
+        p_text = "" # "Paddle"
 
-    # --- 5. READY BOX ---
+        # Determine Color and State
+        if data.paddle_on:
+            p_color = "CYAN" 
+        else:
+            p_color = "RED"
+        
+        # Draw Icon
+        draw_paddle_switch(draw, (8, 294), data.paddle_on, color=p_color, scale=1.0)
+        
+        # Draw Text next to Icon
+        # Icon is approx 36px wide + 2px padding -> 40px offset
+        draw.text((50, 294), p_text, p_color, label_font)
+
+    # --- 6. READY BOX ---
     fmt_ready = "Ready"
     w = draw.textlength(fmt_ready, value_font_lg)
     h = value_font_lg.size + value_font_lg.size // 2
@@ -302,7 +378,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
     draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
 
-    # --- 6. GRAPH / TIMER ---
+    # --- 7. GRAPH / TIMER ---
     if data.flow_data is not None and len(data.flow_data) > 0:
         flow_rate_data = data.flow_rate_moving_avg()
         
