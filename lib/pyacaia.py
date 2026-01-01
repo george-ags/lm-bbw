@@ -11,9 +11,9 @@
 #   Includes "Turbo Scan" logic for instant detection.
 #   Includes Heartbeat Loop to prevent disconnects.
 #   Includes Battery initialization to prevent blank screen.
-#   Includes Periodic Battery Polling.
+#   Includes Periodic Battery Polling (Fix for stuck battery level).
 
-__version__ = "0.5.4"
+__version__ = "0.5.5"
 
 import logging
 import time
@@ -340,19 +340,24 @@ class AcaiaScale(object):
     async def _heartbeat_loop(self):
         """Sends a heartbeat every 3 seconds to keep the scale alive."""
         count = 0
+        iterations = 20
         try:
             while self.connected:
                 await asyncio.sleep(3)
                 if self.connected:
                     await self._write_async(encodeHeartbeat())
-
-                    # --- NEW: Polling for Battery/Settings ---
-                    # Request settings every 60 seconds (20 iterations * 3s)
+                    
+                    # --- POLLING UPDATED ---
+                    # Poll for Settings/Battery every ~60 seconds (20 iterations * 3s)
+                    # We send ID + Notification Request to force a state dump.
+                    # This is a fix for the battery level getting stuck.
                     count += 1
-                    if count >= 20:
+                    if count >= iterations:
+                        # logging.debug("Polling for Battery Update...")
+                        await self._write_async(encodeId(self.isPyxisStyle))
                         await self._write_async(encodeNotificationRequest())
                         count = 0
-
+                        
         except asyncio.CancelledError:
             pass
         except Exception as e:
