@@ -11,9 +11,9 @@
 #   Includes "Turbo Scan" logic for instant detection.
 #   Includes Heartbeat Loop to prevent disconnects.
 #   Includes Battery initialization to prevent blank screen.
-#   Includes Periodic Battery Polling (Fix for stuck battery level).
+#   Includes "Double-Tap" Handshake (Fixes Write Permitted Error + Zero Weight issue).
 
-__version__ = "0.5.5"
+__version__ = "0.5.8"
 
 import logging
 import time
@@ -255,7 +255,6 @@ class AcaiaScale(object):
         self.mac = mac
         self.connected = False
         self.weight = 0.0
-        # Initialize battery to 0 (not None) to prevent blank screen
         self.battery = 0 
         self.units = 'grams'
         self.auto_off = None
@@ -265,17 +264,15 @@ class AcaiaScale(object):
         self.paused_time = 0
         self.transit_delay = 0.2
         
-        # Bleak Threading variables
         self._loop = None
         self._thread = None
         self._client: Optional[BleakClient] = None
         self.packet = bytearray()
         self.char_uuid = None
         self.isPyxisStyle = False
-        self._heartbeat_task = None # Handle for the heartbeat loop
+        self._heartbeat_task = None 
 
     def start_async_loop(self):
-        """Starts a background thread for the AsyncIO loop if not already running."""
         if self._loop is None:
             self._loop = asyncio.new_event_loop()
             self._thread = threading.Thread(target=self._run_loop, args=(self._loop,), daemon=True)
@@ -298,7 +295,7 @@ class AcaiaScale(object):
 
         future = asyncio.run_coroutine_threadsafe(self._connect_async(), self._loop)
         try:
-            future.result(timeout=10) # Block and wait for result
+            future.result(timeout=10) 
         except Exception as e:
             logging.error(f"Bleak Connect Timeout/Error: {e}")
             self.connected = False
@@ -308,7 +305,6 @@ class AcaiaScale(object):
         self.connected = False
         self.timer_running = False
         self.packet = bytearray()
-        # Cancel Heartbeat on disconnect
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
 
@@ -324,9 +320,12 @@ class AcaiaScale(object):
                 self.connected = True
                 
                 await self._setup_services()
+                
+                # Wait for connection to settle
+                await asyncio.sleep(1.0) 
+                
                 await self._send_handshake()
                 
-                # Start Heartbeat Loop
                 self._heartbeat_task = self._loop.create_task(self._heartbeat_loop())
             else:
                 logging.warning("Bleak client reports not connected")
@@ -338,7 +337,6 @@ class AcaiaScale(object):
                 pass
 
     async def _heartbeat_loop(self):
-        """Sends a heartbeat every 3 seconds to keep the scale alive."""
         count = 0
         iterations = 20
         try:
@@ -347,13 +345,9 @@ class AcaiaScale(object):
                 if self.connected:
                     await self._write_async(encodeHeartbeat())
                     
-                    # --- POLLING UPDATED ---
-                    # Poll for Settings/Battery every ~60 seconds (20 iterations * 3s)
-                    # We send ID + Notification Request to force a state dump.
-                    # This is a fix for the battery level getting stuck.
                     count += 1
                     if count >= iterations:
-                        # logging.debug("Polling for Battery Update...")
+                        # Polling Battery: Double Tap ID + Notify
                         await self._write_async(encodeId(self.isPyxisStyle))
                         await self._write_async(encodeNotificationRequest())
                         count = 0
@@ -364,7 +358,7 @@ class AcaiaScale(object):
             logging.error(f"Heartbeat Loop Error: {e}")
 
     async def _setup_services(self):
-        self.char_uuid = OLD_CHAR_UUID # Default
+        self.char_uuid = OLD_CHAR_UUID 
         self.isPyxisStyle = False
 
         for service in self._client.services:
@@ -380,15 +374,35 @@ class AcaiaScale(object):
                     logging.info("Detected Old Style")
 
         try:
+            # Force unsubscribe first to clear stale state
+            try:
+                await self._client.stop_notify(self.char_uuid)
+            except:
+                pass 
+                
             await self._client.start_notify(self.char_uuid, self._notification_handler)
             logging.info(f"Subscribed to {self.char_uuid}")
         except Exception as e:
             logging.error(f"Failed to subscribe to notifications: {e}")
 
     async def _send_handshake(self):
+        logging.info("Performing Handshake (Double-Tap)...")
+        # --- FIX: Send standard writes (no response) but repeat notification req ---
+        
+        # 1. Send ID
         await self._write_async(encodeId(self.isPyxisStyle))
+        await asyncio.sleep(0.2)
+        
+        # 2. Notification Request (Double Tap to ensure scale wakes up)
         await self._write_async(encodeNotificationRequest())
+        await asyncio.sleep(0.25) # Small gap
+        await self._write_async(encodeNotificationRequest())
+        await asyncio.sleep(0.2)
+        
+        # 3. Heartbeat
         await self._write_async(encodeHeartbeat())
+        
+        logging.info("Handshake Complete")
 
     def _notification_handler(self, sender, data):
         self.addBuffer(data)
@@ -421,7 +435,7 @@ class AcaiaScale(object):
     def addBuffer(self, buffer2):
         self.packet += buffer2
 
-    # --- SYNCHRONOUS COMMANDS (Called from Main Thread) ---
+    # --- SYNCHRONOUS COMMANDS ---
 
     def disconnect(self):
         self.connected = False
@@ -437,9 +451,11 @@ class AcaiaScale(object):
         if self.connected and self._loop:
             asyncio.run_coroutine_threadsafe(self._write_async(payload), self._loop)
 
-    async def _write_async(self, data):
+    async def _write_async(self, data, with_response=False):
         if self._client and self._client.is_connected:
             try:
+                # Always force response=False for Old Style scales to avoid permission errors
+                # (Ignoring the with_response arg for safety on 2a80 char)
                 await self._client.write_gatt_char(self.char_uuid, data, response=False)
             except Exception as e:
                 logging.error(f"Write Failed: {e}")
