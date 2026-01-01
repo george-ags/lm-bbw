@@ -69,17 +69,17 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     # Draw Track Outline
     #draw.rectangle((x, y, x + w, y + h), outline=color, width=2)
     draw.rectangle((x, y, x + w, y + h), outline=fg_color, fill=bg_color, width=2)
-    
+
     if is_on:
         # ON: Fill track with color, knob is black (contrast)
         ##draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=color)
         ##knob_color = "BLACK"
         knob_color = color
-        knob_x = x + w - padding - knob_dia
+        knob_x = x + padding
     else:
         # OFF: Empty track, knob is outline or solid color
         knob_color = color
-        knob_x = x + padding
+        knob_x = x + w - padding - knob_dia
 
     # Draw Knob
     knob_y = y + padding
