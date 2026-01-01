@@ -83,7 +83,7 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
 
     # Draw Knob
     knob_y = y + padding
-    draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color)
+    draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color, outline=fg_color, width=1)
 
 # ---------------------------------------------
 
