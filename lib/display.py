@@ -245,7 +245,8 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         has_header_batt = False
         
     background = bg_color
-    if is_landscape and data.paddle_on:
+    #if is_landscape and data.paddle_on:
+    if data.paddle_on:
         background = light_bg_color
         
     img = Image.new("RGBA", (width, height), background)
@@ -295,11 +296,10 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     # --- 5. READY BOX ---
     fmt_ready = "Ready"
     w = draw.textlength(fmt_ready, value_font_lg)
-    h = value_font_lg.size
+    h = value_font_lg.size + value_font_lg.size // 2
     center_x = width // 2
     
-    draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h + 4), 
-                   bg_color, data.memory.color, 4)
+    draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
     draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
 
     # --- 6. GRAPH / TIMER ---
