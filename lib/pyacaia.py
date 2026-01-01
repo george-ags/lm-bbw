@@ -11,8 +11,9 @@
 #   Includes "Turbo Scan" logic for instant detection.
 #   Includes Heartbeat Loop to prevent disconnects.
 #   Includes Battery initialization to prevent blank screen.
+#   Includes Periodic Battery Polling.
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 import logging
 import time
@@ -254,7 +255,7 @@ class AcaiaScale(object):
         self.mac = mac
         self.connected = False
         self.weight = 0.0
-        # FIX 1: Initialize battery to 0 (not None) to prevent Display Crash/Blank Screen
+        # Initialize battery to 0 (not None) to prevent blank screen
         self.battery = 0 
         self.units = 'grams'
         self.auto_off = None
@@ -325,7 +326,7 @@ class AcaiaScale(object):
                 await self._setup_services()
                 await self._send_handshake()
                 
-                # FIX 2: Start Heartbeat Loop
+                # Start Heartbeat Loop
                 self._heartbeat_task = self._loop.create_task(self._heartbeat_loop())
             else:
                 logging.warning("Bleak client reports not connected")
@@ -338,12 +339,20 @@ class AcaiaScale(object):
 
     async def _heartbeat_loop(self):
         """Sends a heartbeat every 3 seconds to keep the scale alive."""
+        count = 0
         try:
             while self.connected:
                 await asyncio.sleep(3)
                 if self.connected:
                     await self._write_async(encodeHeartbeat())
-                    # logging.debug("Heartbeat Sent")
+
+                    # --- NEW: Polling for Battery/Settings ---
+                    # Request settings every 60 seconds (20 iterations * 3s)
+                    count += 1
+                    if count >= 20:
+                        await self._write_async(encodeNotificationRequest())
+                        count = 0
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -484,4 +493,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
