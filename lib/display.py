@@ -19,6 +19,8 @@ try:
     label_font_mid = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 20)
     label_font_lg = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 24)
     value_font = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 24)
+    # New Medium Font for Landscape Header (approx 20% smaller than 36)
+    value_font_med = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 28) 
     value_font_lg = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 36)
     value_font_lg_bold = ImageFont.truetype("lib/font/Quicksand-Bold.ttf", 36)
 except Exception as e:
@@ -40,12 +42,10 @@ def draw_battery(draw, xy, level, scale=1.0):
     elif level < 50: fill_color = "YELLOW"
     else: fill_color = "GREEN"
 
-    #draw.rectangle((x, y, x + w, y + h), outline="WHITE", width=2)
     draw.rectangle((x, y, x + w, y + h), outline=fill_color, fill=bg_color, width=2)
     
     term_y_start = y + int(h * 0.25)
     term_y_end = y + int(h * 0.75)
-    #draw.rectangle((x + w, term_y_start, x + w + terminal_w, term_y_end), fill="WHITE")
     draw.rectangle((x + w, term_y_start, x + w + terminal_w, term_y_end), fill=fill_color)
     
     max_fill_w = w - (padding * 2)
@@ -67,13 +67,10 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     knob_dia = h - (padding * 2)
     
     # Draw Track Outline
-    #draw.rectangle((x, y, x + w, y + h), outline=color, width=2)
     draw.rectangle((x, y, x + w, y + h), outline=fg_color, fill=bg_color, width=2)
 
     if is_on:
         # ON: Fill track with color, knob is black (contrast)
-        ##draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=color)
-        ##knob_color = "BLACK"
         knob_color = color
         knob_x = x + padding
     else:
@@ -288,17 +285,24 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
     
     if is_landscape:
-        header_h = 72
+        # Smaller header to fit graph + footer
+        header_h = 60 
         col_w = 106
-        graph_y = 72
-        ready_y = 120
-        has_header_batt = True
+        graph_y = 60
+        ready_y = 110 # Adjusted for new layout
+        has_header_batt = False # Battery moved to footer
+        footer_line_y = height - 35
+        # Use slightly smaller font for Landscape Header
+        header_val_font = value_font_med 
     else:
+        # Portrait Defaults
         header_h = 96
         col_w = 120
         graph_y = 98
         ready_y = 164
         has_header_batt = False
+        footer_line_y = 285 # Original Portrait logic (285 is effectively "Footer Start" on 320h)
+        header_val_font = value_font_lg
         
     background = bg_color
     if data.paddle_on:
@@ -312,96 +316,138 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     draw.line([(col_w, 0), (col_w, header_h)], fill=fg_color, width=2)
     if is_landscape:
         draw.line([(col_w * 2, 0), (col_w * 2, header_h)], fill=fg_color, width=2)
-    draw.line([(0, 285), (240, 285)], fill=fg_color, width=2)
-
-    # --- 3. LABELS ---
-    lbl_x = 10 if is_landscape else 16
-    lbl_y = 8 if is_landscape else 16
-    draw.text((lbl_x, lbl_y), "weight(g)", fg_color, label_font)
-    
-    lbl_x = 118 if is_landscape else 130
-    draw.text((lbl_x, lbl_y), "target %s(g)" % data.memory.name, fg_color, label_font)
-
-    if has_header_batt:
-        draw_battery(draw, (253, 10), data.battery, scale=1.0)
-    
-    # --- 4. VALUES ---
-    fmt_weight = "{:0.1f}".format(data.weight)
-    w = draw.textlength(fmt_weight, value_font_lg)
-    h = value_font_lg.size
-    draw.text(((col_w - w) / 2, (header_h + 12 - h) / 2), fmt_weight, fg_color, value_font_lg)
-
-    fmt_target = "{:0.1f}".format(data.memory.target)
-    target_font = value_font_lg
-    w = draw.textlength(fmt_target, target_font)
-    h = target_font.size
-    draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, fg_color, target_font)
-
-    # Battery Value Display
-    fmt_batt = "%d%%" % data.battery
-    if has_header_batt:
-        w = draw.textlength(fmt_batt, value_font_lg)
-        draw.text(((col_w - w)/2 + (col_w * 2) + 2, (header_h + 16 - h) / 2), fmt_batt, fg_color, value_font_lg)
+        # Footer Line for Landscape
+        draw.line([(0, footer_line_y), (width, footer_line_y)], fill=fg_color, width=2)
     else:
-        # Portrait: Footer - Aligned to Right Edge
-        w_text = draw.textlength(fmt_batt, label_font)
+        # Footer Line for Portrait
+        draw.line([(0, 285), (240, 285)], fill=fg_color, width=2)
+
+    # --- 3. HEADER LABELS & VALUES ---
+    # Common Offsets
+    lbl_x_1 = 10 if is_landscape else 16
+    lbl_x_2 = 118 if is_landscape else 130
+    lbl_y = 8 if is_landscape else 16
+    
+    # Column 1: Weight
+    draw.text((lbl_x_1, lbl_y), "weight(g)", fg_color, label_font)
+    fmt_weight = "{:0.1f}".format(data.weight)
+    w = draw.textlength(fmt_weight, header_val_font)
+    h = header_val_font.size
+    draw.text(((col_w - w) / 2, (header_h + 12 - h) / 2), fmt_weight, fg_color, header_val_font)
+    
+    # Column 2: Target
+    draw.text((lbl_x_2, lbl_y), "tgt %s(g)" % data.memory.name, fg_color, label_font)
+    fmt_target = "{:0.1f}".format(data.memory.target)
+    # Use same font size for target
+    w = draw.textlength(fmt_target, header_val_font)
+    draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, fg_color, header_val_font)
+
+    # Column 3: Logic varies
+    if is_landscape:
+        # LANDSCAPE HEADER COL 3: BREW TIMER
+        draw.text((234, 8), "timer", fg_color, label_font)
+        fmt_timer = "{:0.1f}".format(data.shot_time_elapsed)
+        w = draw.textlength(fmt_timer, header_val_font)
+        # Center in 3rd col (start ~212)
+        draw.text(((col_w - w)/2 + (col_w * 2) + 2, (header_h + 12 - h) / 2), fmt_timer, fg_color, header_val_font)
+    
+    # --- 4. FOOTER (Battery & Paddle) ---
+    # Determine Paddle Color/Text
+    p_text = ""
+    if data.paddle_on:
+        p_color = "BLUE" 
+    else:
+        p_color = "RED"
+        
+    fmt_batt = "%d%%" % data.battery
+    w_batt_text = draw.textlength(fmt_batt, label_font)
+    
+    # Calculate Footer Y Position
+    # For Landscape, footer starts at footer_line_y (~205) + padding
+    # For Portrait, it's ~294
+    
+    if is_landscape:
+        footer_icon_y = footer_line_y + 11 # Vertically centered in 35px footer
+        footer_text_y = footer_line_y + 9
+        
+        # Right Side: Battery
         padding_right = 8
         icon_width = 27 
-        icon_x = width - padding_right - icon_width
-        text_x = icon_x - 4 - w_text
+        batt_icon_x = width - padding_right - icon_width
+        batt_text_x = batt_icon_x - 4 - w_batt_text
         
-        draw_battery(draw, (icon_x, 296), data.battery, scale=1.0)
-        draw.text((text_x, 294), fmt_batt, fg_color, label_font)
+        draw_battery(draw, (batt_icon_x, footer_icon_y), data.battery, scale=1.0)
+        draw.text((batt_text_x, footer_text_y), fmt_batt, fg_color, label_font)
         
-    # --- 5. PADDLE ICON AND TEXT ---
-    if not is_landscape:
-        p_text = "" # "Paddle"
-
-        # Determine Color and State
-        if data.paddle_on:
-            p_color = "BLUE" 
-        else:
-            p_color = "RED"
+        # Left Side: Paddle
+        paddle_icon_x = 8
+        draw_paddle_switch(draw, (paddle_icon_x, footer_icon_y), data.paddle_on, color=p_color, scale=1.0)
+        draw.text((paddle_icon_x + 42, footer_text_y), p_text, p_color, label_font)
         
-        # Draw Icon
+    else:
+        # PORTRAIT FOOTER
+        # Right Side: Battery
+        padding_right = 8
+        icon_width = 27 
+        batt_icon_x = width - padding_right - icon_width
+        batt_text_x = batt_icon_x - 4 - w_batt_text
+        
+        draw_battery(draw, (batt_icon_x, 296), data.battery, scale=1.0)
+        draw.text((batt_text_x, 294), fmt_batt, fg_color, label_font)
+        
+        # Left Side: Paddle
         draw_paddle_switch(draw, (8, 294), data.paddle_on, color=p_color, scale=1.0)
-        
-        # Draw Text next to Icon
-        # Icon is approx 36px wide + 2px padding -> 40px offset
         draw.text((50, 294), p_text, p_color, label_font)
 
-    # --- 6. READY BOX ---
+    # --- 5. READY BOX ---
     fmt_ready = "Ready"
+    # Use main font for Ready text
     w = draw.textlength(fmt_ready, value_font_lg)
     h = value_font_lg.size + value_font_lg.size // 2
     center_x = width // 2
     
+    # Don't draw ready box if shot is running and we have data (Graph mode)
+    # But current logic is to always draw it if not graph? No, original logic was specific.
+    # We will stick to drawing it if data says so or relying on layers.
+    # The original code drew it unconditionally at the specific Y.
+    
     draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
     draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
 
-    # --- 7. GRAPH / TIMER ---
+    # --- 6. GRAPH ---
     if data.flow_data is not None and len(data.flow_data) > 0:
         flow_rate_data = data.flow_rate_moving_avg()
         
         if is_landscape:
-            g_w, g_h = 320, 132
-            timer_y = 208
-            timer_font = label_font_lg
+            # Graph Height = Height (240) - Header (60) - Footer (35) = 145
+            g_w, g_h = 320, 145 
+            # We don't draw the timer in the graph area anymore for landscape (it's in header)
+            # Just draw the graph
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
+            img.paste(flow_image, (0, header_h))
+            
+            # Draw Time Axis Labels (bottom of graph area)
+            last_sample_time = data.sample_rate * float(len(data.flow_data))
+            axis_y = footer_line_y - 20 # Sits just above footer line
+            draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
+            draw.text((width - 22, axis_y), "0s", fg_color, label_font)
+            
         else:
+            # Portrait Graph
             g_w, g_h = 240, 160
             timer_y = 262
             timer_font = label_font
+            
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
+            img.paste(flow_image, (0, graph_y))
+            
+            last_sample_time = data.sample_rate * float(len(data.flow_data))
+            axis_y = timer_y 
+            draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
+            draw.text((width - 22, axis_y), "0s", fg_color, label_font)
 
-        flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
-        img.paste(flow_image, (0, graph_y))
-        
-        last_sample_time = data.sample_rate * float(len(data.flow_data))
-        axis_y = timer_y + 4 if is_landscape else timer_y
-        draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
-        draw.text((width - 22, axis_y), "0s", fg_color, label_font)
-
-        fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
-        w = draw.textlength(fmt_shot_time, timer_font)
-        draw.text(((width - w) / 2, timer_y), fmt_shot_time, fg_color, timer_font)
+            fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
+            w = draw.textlength(fmt_shot_time, timer_font)
+            draw.text(((width - w) / 2, timer_y), fmt_shot_time, fg_color, timer_font)
 
     return img
