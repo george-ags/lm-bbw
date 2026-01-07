@@ -11,9 +11,10 @@
 #   Includes "Turbo Scan" logic for instant detection.
 #   Includes Heartbeat Loop to prevent disconnects.
 #   Includes Battery initialization to prevent blank screen.
-#   Includes "Double-Tap" Handshake with OPTIMIZED TIMINGS (Fixes Zero Weight issue).
+#   Includes "Double-Tap" Handshake.
+#   Includes "Connection Verification" (Auto-Restart if Battery=0).
 
-__version__ = "0.5.9"
+__version__ = "0.6.0"
 
 import logging
 import time
@@ -295,7 +296,8 @@ class AcaiaScale(object):
 
         future = asyncio.run_coroutine_threadsafe(self._connect_async(), self._loop)
         try:
-            future.result(timeout=10) 
+            # Increased timeout slightly to account for validation delay
+            future.result(timeout=12) 
         except Exception as e:
             logging.error(f"Bleak Connect Timeout/Error: {e}")
             self.connected = False
@@ -320,13 +322,25 @@ class AcaiaScale(object):
                 self.connected = True
                 
                 await self._setup_services()
-                
-                # Stabilize Connection
                 await asyncio.sleep(1.0) 
                 
                 await self._send_handshake()
                 
                 self._heartbeat_task = self._loop.create_task(self._heartbeat_loop())
+                
+                # --- NEW: Connection Validation ---
+                logging.info("Verifying Data Stream...")
+                await asyncio.sleep(2.0) # Wait 2s for data to arrive
+                
+                if self.battery == 0:
+                    logging.error("Handshake Failed (Battery is 0). Disconnecting to retry...")
+                    # Force disconnect. This triggers _on_disconnect, setting connected=False
+                    await self._client.disconnect() 
+                    return
+                
+                logging.info(f"Connection Verified. Battery: {self.battery}%")
+                # ----------------------------------
+                
             else:
                 logging.warning("Bleak client reports not connected")
                 self.connected = False
@@ -345,7 +359,6 @@ class AcaiaScale(object):
                 if self.connected:
                     await self._write_async(encodeHeartbeat())
                     
-                    # Polling Logic: Update Battery every 60s
                     count += 1
                     if count >= iterations:
                         await self._write_async(encodeId(self.isPyxisStyle))
@@ -385,18 +398,15 @@ class AcaiaScale(object):
             logging.error(f"Failed to subscribe to notifications: {e}")
 
     async def _send_handshake(self):
-        logging.info("Performing Handshake (Double-Tap with Extended Delays)...")
+        logging.info("Performing Handshake (Double-Tap)...")
         
         # 1. Send ID (Identify)
         await self._write_async(encodeId(self.isPyxisStyle))
-        await asyncio.sleep(0.4) # Increased delay
+        await asyncio.sleep(0.4) 
         
         # 2. Notification Request (Double Tap)
-        # Send first request
         await self._write_async(encodeNotificationRequest())
-        await asyncio.sleep(0.5) # Extended gap to ensure processing
-        
-        # Send second request (The "Double Tap")
+        await asyncio.sleep(0.5) 
         await self._write_async(encodeNotificationRequest())
         await asyncio.sleep(0.3)
         
@@ -436,7 +446,7 @@ class AcaiaScale(object):
     def addBuffer(self, buffer2):
         self.packet += buffer2
 
-    # --- SYNCHRONOUS COMMANDS (Called from Main Thread) ---
+    # --- SYNCHRONOUS COMMANDS ---
 
     def disconnect(self):
         self.connected = False
@@ -455,7 +465,7 @@ class AcaiaScale(object):
     async def _write_async(self, data, with_response=False):
         if self._client and self._client.is_connected:
             try:
-                # Force response=False for old scales to avoid permission errors
+                # Always force response=False for Old Style scales
                 await self._client.write_gatt_char(self.char_uuid, data, response=False)
             except Exception as e:
                 logging.error(f"Write Failed: {e}")
