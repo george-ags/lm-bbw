@@ -345,7 +345,11 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     # Column 3: Logic varies
     if is_landscape:
         # LANDSCAPE HEADER COL 3: BREW TIMER
-        draw.text((234, 8), "timer", fg_color, label_font)
+        timer_label = "timer"
+        w_label = draw.textlength(timer_label, label_font)
+        # Centered label: Use same offset logic as value
+        draw.text(((col_w - w_label)/2 + (col_w * 2) + 2, 8), timer_label, fg_color, label_font)
+        
         fmt_timer = "{:0.1f}".format(data.shot_time_elapsed)
         w = draw.textlength(fmt_timer, header_val_font)
         # Center in 3rd col (start ~212)
