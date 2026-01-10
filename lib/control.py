@@ -56,7 +56,7 @@ class ControlManager:
         # ACTIVITY TRACKING
         self.last_activity_time = timer()
         self.is_sleeping = False
-        self.sleep_start_time = 0 # Track when sleep began
+        self.sleep_start_time = 0 
         
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
@@ -75,7 +75,7 @@ class ControlManager:
         self.tgt_dec_button.when_released = lambda: self.register_activity() or self.__change_target(-0.1)
         self.tgt_dec_button.when_held = lambda: self.register_activity() or self.__change_target_held(-1)
 
-        # PADDLE SWITCH (Debounced)
+        # PADDLE SWITCH
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
         self.paddle_switch.when_pressed = lambda: self.register_activity() or self.__start_shot()
         
@@ -103,18 +103,22 @@ class ControlManager:
         if self.is_sleeping:
             logging.info("Activity Detected -> Waking Up from Sleep Mode")
             self.is_sleeping = False
-            self.discovered_mac = None # Restart scanner state
+            self.discovered_mac = None 
 
     def check_auto_sleep(self, timeout_seconds):
         """Checks if inactivity timeout is reached."""
         if timeout_seconds <= 0: return False 
         
+        # FIX: Reset activity timer continuously while Pump is ON
+        if self.relay_on():
+            self.last_activity_time = timer()
+            return False
+
         if not self.is_sleeping and (timer() - self.last_activity_time > timeout_seconds):
-            if not self.relay_on():
-                logging.info(f"No activity for {timeout_seconds}s -> Sleep Mode Active (Scanner Paused)")
-                self.is_sleeping = True
-                self.sleep_start_time = timer() # Record start time
-                return True
+            logging.info(f"No activity for {timeout_seconds}s -> Sleep Mode Active (Scanner Paused)")
+            self.is_sleeping = True
+            self.sleep_start_time = timer()
+            return True
         return False
     # ------------------------
 
@@ -131,7 +135,6 @@ class ControlManager:
     def _bg_scan_loop(self):
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
-            # STOP SCANNING IF SLEEPING
             if self.is_sleeping:
                 time.sleep(1)
                 continue
@@ -183,7 +186,9 @@ class ControlManager:
         return self.relay.value
 
     def add_flow_rate_data(self, data_point: float):
-        self.register_activity() 
+        # FIX: REMOVED register_activity() here. 
+        # Merely reading weight should not keep system awake.
+        
         if self.relay_on() or self.relay_off_time + 3.0 > timer():
             self.flow_rate_data.append(data_point)
             if len(self.flow_rate_data) > self.flow_rate_max_points:
