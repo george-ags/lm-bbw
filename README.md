@@ -179,8 +179,13 @@ Scroll to the bottom of the file and add, or modify, (best is under section [all
 gpu_mem=16
 ```
 
-Finally, we want to disable the login UI. Under System Options -> Boot / Auto Login choose "Console" 
+Finally, we want to disable the login UI:
+```commandline
+sudo raspi-config
+```
+Under System Options -> Boot / Auto Login choose "Console" 
 
+Reboot the Pi if reboot was not done after exit from `raspi-config`:
 ```commandline
 sudo reboot
 ```
@@ -188,7 +193,7 @@ sudo reboot
 ### Software dependencies
 
 ```commandline
-sudo apt install python3-pandas python3-pip libglib2.0-dev git
+sudo apt install -y python3-pandas python3-pip libglib2.0-dev git
 sudo pip3 install bleak --break-system-packages
 ```
 
