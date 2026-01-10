@@ -20,7 +20,7 @@ from lib.webserver import WebServer
 WEB_PORT = 80
 WEB_DIR = '/opt/lm-bbw/web'
 MIN_GOOD_SHOT_DURATION = 10
-MAC_SAVE_FILE = '/opt/lm-bbw/mac.save' # File to store the scale address
+MAC_SAVE_FILE = '/opt/lm-bbw/mac.save'
 
 stop = False
 overshoot_update_executor = ThreadPoolExecutor(max_workers=1)
@@ -30,6 +30,12 @@ logPath = os.environ.get('LOGFILE', '/var/log/lm-bbw.log')
 
 refreshRate = float(os.environ.get('REFRESH_RATE', '0.1'))
 smoothing = round(1 / refreshRate)
+
+# --- CONFIGURATION ---
+idle_timeout = int(os.environ.get('IDLE_TIMEOUT', '900'))
+# Convert minutes to seconds
+sleep_pause_seconds = int(os.environ.get('SLEEP_PAUSE_MINUTES', '30')) * 60
+# ---------------------
 
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 stdout_handler.setLevel(logging.INFO)
@@ -42,7 +48,6 @@ logging.basicConfig(
     handlers=handlers
 )
 
-# --- MAC PERSISTENCE HELPERS ---
 def save_mac_address(mac):
     try:
         with open(MAC_SAVE_FILE, 'w') as f:
@@ -56,13 +61,12 @@ def load_last_mac():
         if os.path.exists(MAC_SAVE_FILE):
             with open(MAC_SAVE_FILE, 'r') as f:
                 mac = f.read().strip()
-                if len(mac) > 10: # Simple validation
+                if len(mac) > 10:
                     logging.info(f"Loaded Last Known MAC: {mac}")
                     return mac
     except Exception as e:
         logging.error(f"Failed to load MAC: {e}")
     return None
-# -------------------------------
 
 def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
     if mgr.shot_time_elapsed() < MIN_GOOD_SHOT_DURATION:
@@ -76,7 +80,6 @@ def update_overshoot(scale: AcaiaScale, mgr: ControlManager):
 
 
 def check_target_disable_relay(scale: AcaiaScale, mgr: ControlManager):
-    # Grace Period: Ignore weight checks for the first 1.5 seconds.
     if mgr.shot_time_elapsed() < 1.5:
         return
 
@@ -98,15 +101,11 @@ def main():
     mgr = ControlManager(max_flow_points=round(60 / refreshRate))
     scale = AcaiaScale(mac='')
 
-    # --- AUTO-CONNECT LOGIC ---
-    # Pre-load the discovered_mac so the ControlManager tries to connect immediately
-    # without waiting for a scan.
     last_mac = load_last_mac()
     if last_mac:
         mgr.discovered_mac = last_mac
-    # --------------------------
 
-    mgr.add_tare_handler(lambda channel: scale.tare())
+    mgr.add_tare_handler(lambda: scale.tare())
 
     last_sample_time: Optional[float] = None
     last_weight: Optional[float] = None
@@ -115,16 +114,25 @@ def main():
     shot_started_with_scale = False
 
     while not stop:
+        # --- AUTO SLEEP/WAKE LOGIC ---
+        # 1. Check if we should go to sleep
+        mgr.check_auto_sleep(idle_timeout)
+        
+        # 2. Check if we should wake up automatically after pause
+        if mgr.is_sleeping and sleep_pause_seconds > 0:
+            if (timer() - mgr.sleep_start_time) > sleep_pause_seconds:
+                logging.info("Sleep Pause Timeout Reached -> Auto-Waking System")
+                mgr.register_activity() # This resets sleeping=False and restarts scanner
+        # -----------------------------
+
         is_connected = control.try_connect_scale(scale, mgr)
         
-        # If we successfully connected, verify we have the MAC saved
         if is_connected and scale.mac and scale.mac != last_mac:
             save_mac_address(scale.mac)
             last_mac = scale.mac
 
         relay_is_on = mgr.relay_on()
 
-        # 1. Detect the moment the shot starts (Rising Edge)
         if relay_is_on and not last_relay_state:
             shot_started_with_scale = is_connected
             if shot_started_with_scale:
@@ -132,7 +140,6 @@ def main():
             else:
                 logging.info("Shot Started in MANUAL Mode (Scale not ready)")
 
-        # 2. Handle the shot
         if is_connected:
             check_target_disable_relay(scale, mgr)
         
@@ -141,7 +148,7 @@ def main():
                 logging.warning("LOST SCALE CONNECTION DURING SHOT - EMERGENCY STOP")
                 mgr.disable_relay()
             else:
-                pass # Manual Mode
+                pass 
         
         last_relay_state = relay_is_on
 
