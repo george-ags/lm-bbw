@@ -55,13 +55,13 @@ class ControlManager:
         
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
-        self.scale_is_connected_flag = False # Updated by main loop to pause scanning
+        self.scale_is_connected_flag = False 
         
         self.load_memory()
 
         self.relay = DigitalOutputDevice(ControlManager.RELAY_GPIO)
 
-        # TARGET BUTTONS - Reduced bounce_time for faster response
+        # TARGET BUTTONS
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
         self.tgt_inc_button.when_released = lambda: self.__change_target(0.1)
         self.tgt_inc_button.when_held = lambda: self.__change_target_held(1)
@@ -70,8 +70,9 @@ class ControlManager:
         self.tgt_dec_button.when_released = lambda: self.__change_target(-0.1)
         self.tgt_dec_button.when_held = lambda: self.__change_target_held(-1)
 
-        # PADDLE SWITCH - Watchdog Mode
-        self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=None)
+        # --- FIX 1: Restore Debounce to filter Bluetooth Connection Noise ---
+        # bounce_time=0.05 (50ms) prevents the radio burst from triggering a shot
+        self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
         self.paddle_switch.when_pressed = self.__start_shot
         
         self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True)
@@ -83,12 +84,10 @@ class ControlManager:
         self.tgt_button_was_held = False
 
         # START THREADS
-        # 1. Paddle Safety Watchdog
         self.wd_thread = threading.Thread(target=self._watchdog_loop)
         self.wd_thread.daemon = True
         self.wd_thread.start()
 
-        # 2. Bluetooth Scanner Thread (Prevents UI freezing)
         self.scan_thread = threading.Thread(target=self._bg_scan_loop)
         self.scan_thread.daemon = True
         self.scan_thread.start()
@@ -98,7 +97,8 @@ class ControlManager:
         logging.info("Paddle Watchdog Started")
         while self.running:
             if self.relay_on() and not self.paddle_switch.is_pressed:
-                time.sleep(0.01) # Filter noise
+                # Wait 50ms to ensure it's a real release, not vibration
+                time.sleep(0.05) 
                 if not self.paddle_switch.is_pressed:
                     logging.info("Watchdog detected paddle OPEN - Stopping shot")
                     self.disable_relay()
@@ -108,25 +108,19 @@ class ControlManager:
         """Scans for scale in background so Main Loop never freezes."""
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
-            # Only scan if:
-            # 1. Switch is ON
-            # 2. Scale is NOT currently connected
-            # 3. We don't already have a pending discovered MAC
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
-                    # This blocks for 1s, but it's okay because we are in a background thread!
                     devices = pyacaia.find_acaia_devices(timeout=1)
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.debug("Background Scanner found: %s" % self.discovered_mac)
-                        time.sleep(1) # Wait a bit before next check
+                        time.sleep(1) 
                     else:
-                        time.sleep(5) # Scan failed, wait 5s to save CPU/Battery
+                        time.sleep(5) 
                 except Exception as e:
                     logging.error("Scanner Error: %s" % e)
                     time.sleep(5)
             else:
-                # If connected or switch off, just sleep peacefully
                 time.sleep(1)
 
     def save_memory(self):
@@ -169,14 +163,12 @@ class ControlManager:
             self.relay_off_time = timer()
             self.relay.off()
             
-            # --- FIX: Only save if scale is connected ---
             if self.scale_is_connected_flag:
                 memories_snapshot = copy.deepcopy(self.memories)
                 save_thread = threading.Thread(target=self._save_worker, args=(memories_snapshot,))
                 save_thread.start()
             else:
                 logging.info("Scale disconnected - Skipping memory save")
-            # --------------------------------------------
 
     def current_memory(self):
         return self.memories[0]
@@ -219,7 +211,6 @@ class ControlManager:
 
 def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
-        # Update Manager Flag so Background Thread knows when to pause scanning
         mgr.scale_is_connected_flag = scale.connected
 
         if not mgr.should_scale_connect():
@@ -231,17 +222,21 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
         if scale.connected:
             return True
 
-        # Check if Background Thread found something!
         if mgr.discovered_mac:
             logging.info("Main Thread connecting to found MAC: %s" % mgr.discovered_mac)
             scale.mac = mgr.discovered_mac
             scale.connect()
             
-            # --- FIX START: Clear old graph data on new connection ---
             if scale.connected:
                 logging.info("Scale connected - Clearing old shot data")
                 mgr.flow_rate_data.clear()
-            # --- FIX END ---------------------------------------------
+                
+                # --- FIX 2: Check for Ghost Start ---
+                # If relay turned ON during connection but paddle is OFF, kill it.
+                if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
+                    logging.warning("Ghost Start detected during connection (Noise). Forcing Relay OFF.")
+                    mgr.relay.off()
+                # ------------------------------------
 
             mgr.discovered_mac = None 
             return True
@@ -252,4 +247,3 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
         logging.error("Failed to connect to found device:%s" % str(ex))
         mgr.discovered_mac = None
         return False
-      
