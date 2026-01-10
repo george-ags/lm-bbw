@@ -53,6 +53,11 @@ class ControlManager:
         self.image_needs_save = False
         self.running = True
         
+        # ACTIVITY TRACKING
+        self.last_activity_time = timer()
+        self.is_sleeping = False
+        self.sleep_start_time = 0 # Track when sleep began
+        
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
         self.scale_is_connected_flag = False 
@@ -63,22 +68,21 @@ class ControlManager:
 
         # TARGET BUTTONS
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_inc_button.when_released = lambda: self.__change_target(0.1)
-        self.tgt_inc_button.when_held = lambda: self.__change_target_held(1)
+        self.tgt_inc_button.when_released = lambda: self.register_activity() or self.__change_target(0.1)
+        self.tgt_inc_button.when_held = lambda: self.register_activity() or self.__change_target_held(1)
 
         self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_dec_button.when_released = lambda: self.__change_target(-0.1)
-        self.tgt_dec_button.when_held = lambda: self.__change_target_held(-1)
+        self.tgt_dec_button.when_released = lambda: self.register_activity() or self.__change_target(-0.1)
+        self.tgt_dec_button.when_held = lambda: self.register_activity() or self.__change_target_held(-1)
 
-        # --- FIX 1: Restore Debounce to filter Bluetooth Connection Noise ---
-        # bounce_time=0.05 (50ms) prevents the radio burst from triggering a shot
+        # PADDLE SWITCH (Debounced)
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
-        self.paddle_switch.when_pressed = self.__start_shot
+        self.paddle_switch.when_pressed = lambda: self.register_activity() or self.__start_shot()
         
-        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True)
+        self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True) 
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
-        self.memory_button.when_pressed = self.__rotate_memory
+        self.memory_button.when_pressed = lambda: self.register_activity() or self.__rotate_memory()
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
         self.tgt_button_was_held = False
@@ -92,12 +96,32 @@ class ControlManager:
         self.scan_thread.daemon = True
         self.scan_thread.start()
 
+    # --- ACTIVITY HELPERS ---
+    def register_activity(self):
+        """Updates timestamp and wakes system if sleeping."""
+        self.last_activity_time = timer()
+        if self.is_sleeping:
+            logging.info("Activity Detected -> Waking Up from Sleep Mode")
+            self.is_sleeping = False
+            self.discovered_mac = None # Restart scanner state
+
+    def check_auto_sleep(self, timeout_seconds):
+        """Checks if inactivity timeout is reached."""
+        if timeout_seconds <= 0: return False 
+        
+        if not self.is_sleeping and (timer() - self.last_activity_time > timeout_seconds):
+            if not self.relay_on():
+                logging.info(f"No activity for {timeout_seconds}s -> Sleep Mode Active (Scanner Paused)")
+                self.is_sleeping = True
+                self.sleep_start_time = timer() # Record start time
+                return True
+        return False
+    # ------------------------
+
     def _watchdog_loop(self):
-        """Checks 20 times/sec if the paddle is physically open."""
         logging.info("Paddle Watchdog Started")
         while self.running:
             if self.relay_on() and not self.paddle_switch.is_pressed:
-                # Wait 50ms to ensure it's a real release, not vibration
                 time.sleep(0.05) 
                 if not self.paddle_switch.is_pressed:
                     logging.info("Watchdog detected paddle OPEN - Stopping shot")
@@ -105,9 +129,13 @@ class ControlManager:
             time.sleep(0.05)
 
     def _bg_scan_loop(self):
-        """Scans for scale in background so Main Loop never freezes."""
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
+            # STOP SCANNING IF SLEEPING
+            if self.is_sleeping:
+                time.sleep(1)
+                continue
+
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
                     devices = pyacaia.find_acaia_devices(timeout=1)
@@ -143,7 +171,10 @@ class ControlManager:
             self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
 
     def add_tare_handler(self, callback: Callable):
-        self.tare_button.when_pressed = callback
+        def wrapped_callback():
+            self.register_activity()
+            callback()
+        self.tare_button.when_pressed = wrapped_callback
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
@@ -152,6 +183,7 @@ class ControlManager:
         return self.relay.value
 
     def add_flow_rate_data(self, data_point: float):
+        self.register_activity() 
         if self.relay_on() or self.relay_off_time + 3.0 > timer():
             self.flow_rate_data.append(data_point)
             if len(self.flow_rate_data) > self.flow_rate_max_points:
@@ -213,6 +245,13 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
         mgr.scale_is_connected_flag = scale.connected
 
+        # DISCONNECT ON SLEEP
+        if mgr.is_sleeping:
+            if scale.connected:
+                logging.info("Sleep Mode Active -> Disconnecting Scale")
+                scale.disconnect()
+            return False
+
         if not mgr.should_scale_connect():
             if scale.connected:
                 logging.debug("Scale connect switch off, disconnecting")
@@ -231,12 +270,9 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
                 logging.info("Scale connected - Clearing old shot data")
                 mgr.flow_rate_data.clear()
                 
-                # --- FIX 2: Check for Ghost Start ---
-                # If relay turned ON during connection but paddle is OFF, kill it.
                 if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
-                    logging.warning("Ghost Start detected during connection (Noise). Forcing Relay OFF.")
+                    logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
                     mgr.relay.off()
-                # ------------------------------------
 
             mgr.discovered_mac = None 
             return True
