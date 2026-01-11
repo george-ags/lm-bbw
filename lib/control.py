@@ -144,13 +144,14 @@ class ControlManager:
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.debug("Background Scanner found: %s" % self.discovered_mac)
+                        # --- FIX: Finding a device resets the sleep timer ---
+                        self.register_activity() 
+                        # --------------------------------------------------
                         time.sleep(1) 
                     else:
-                        # --- FIX: Increase sleep to 10s to prevent rapid DBus usage ---
                         time.sleep(10) 
                 except Exception as e:
                     logging.error("Scanner Error: %s" % e)
-                    # --- FIX: Increase sleep to 10s on error ---
                     time.sleep(10)
             else:
                 time.sleep(1)
@@ -272,6 +273,10 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
             if scale.connected:
                 logging.info("Scale connected - Clearing old shot data")
                 mgr.flow_rate_data.clear()
+                
+                # --- FIX: Connection success resets the sleep timer ---
+                mgr.register_activity()
+                # ----------------------------------------------------
                 
                 if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
                     logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
