@@ -13,14 +13,15 @@
 #   Includes Battery initialization to prevent blank screen.
 #   Includes "Double-Tap" Handshake.
 #   Includes "Connection Verification".
-#   Includes D-Bus Resource Leak Fix (Context Manager Implementation).
+#   Includes D-Bus Resource Leak Fix (Forced Garbage Collection).
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 import logging
 import time
 import threading
 import asyncio
+import gc  # --- FIX: Import Garbage Collector ---
 from typing import Optional, List
 
 # Bleak Imports
@@ -45,7 +46,7 @@ def find_acaia_devices(timeout=5) -> List[str]:
     """
     Synchronous wrapper for Bleak discovery with "Return Early" logic.
     Returns immediately when an ACAIA device is found, or waits for timeout.
-    Uses Context Manager to strictly prevent D-Bus connection leaks.
+    Includes FORCED GARBAGE COLLECTION to prevent D-Bus connection leaks.
     """
     logging.debug('Looking for ACAIA devices (Turbo Scan)...')
     
@@ -61,21 +62,24 @@ def find_acaia_devices(timeout=5) -> List[str]:
                 found_devs.append(device.address)
                 stop_event.set()
 
-        # --- FIX: Use Context Manager ('async with') ---
-        # This guarantees resources are released even if errors occur.
         try:
+            # Use Context Manager
             async with BleakScanner(detection_callback=detection_callback) as scanner:
                 try:
-                    # Wait for device or timeout
                     await asyncio.wait_for(stop_event.wait(), timeout=timeout)
                 except asyncio.TimeoutError:
                     pass 
-                # The Context Manager automatically calls scanner.stop() here
         except Exception as e:
             logging.error(f"Bleak Scan Error: {e}")
         
-        # Small sleep to allow system D-Bus to update file descriptors
-        await asyncio.sleep(0.5)
+        # --- FIX: Aggressive Resource Cleanup ---
+        # Explicitly delete the scanner reference and force garbage collection.
+        # This forces the D-Bus connection to close IMMEDIATELY.
+        scanner = None
+        gc.collect()
+        
+        # Sleep to allow the OS to reclaim the file descriptor
+        await asyncio.sleep(1.0)
         
         return found_devs
 
