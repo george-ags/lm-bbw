@@ -13,9 +13,9 @@
 #   Includes Battery initialization to prevent blank screen.
 #   Includes "Double-Tap" Handshake.
 #   Includes "Connection Verification".
-#   Includes D-Bus Resource Leak Fix (Explicit Cleanup).
+#   Includes D-Bus Resource Leak Fix (Context Manager Implementation).
 
-__version__ = "0.6.1"
+__version__ = "0.6.3"
 
 import logging
 import time
@@ -45,7 +45,7 @@ def find_acaia_devices(timeout=5) -> List[str]:
     """
     Synchronous wrapper for Bleak discovery with "Return Early" logic.
     Returns immediately when an ACAIA device is found, or waits for timeout.
-    Includes explicit cleanup to prevent D-Bus connection leaks.
+    Uses Context Manager to strictly prevent D-Bus connection leaks.
     """
     logging.debug('Looking for ACAIA devices (Turbo Scan)...')
     
@@ -61,24 +61,21 @@ def find_acaia_devices(timeout=5) -> List[str]:
                 found_devs.append(device.address)
                 stop_event.set()
 
-        # --- FIX: Explicit Start/Stop with Cleanup Delay ---
-        scanner = BleakScanner(detection_callback=detection_callback)
+        # --- FIX: Use Context Manager ('async with') ---
+        # This guarantees resources are released even if errors occur.
         try:
-            await scanner.start()
-            try:
-                # Wait for device or timeout
-                await asyncio.wait_for(stop_event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                pass 
+            async with BleakScanner(detection_callback=detection_callback) as scanner:
+                try:
+                    # Wait for device or timeout
+                    await asyncio.wait_for(stop_event.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    pass 
+                # The Context Manager automatically calls scanner.stop() here
         except Exception as e:
             logging.error(f"Bleak Scan Error: {e}")
-        finally:
-            try:
-                await scanner.stop()
-                # CRITICAL: Small sleep to allow D-Bus to release the file descriptor
-                await asyncio.sleep(0.5) 
-            except Exception as e:
-                logging.error(f"Scanner Cleanup Error: {e}")
+        
+        # Small sleep to allow system D-Bus to update file descriptors
+        await asyncio.sleep(0.5)
         
         return found_devs
 
