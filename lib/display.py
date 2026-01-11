@@ -248,6 +248,11 @@ class Display:
                 
                 # Wake up logic
                 if not screen_is_on:
+                    # --- FIX: Restart PWM explicitly when waking up ---
+                    try:
+                        self.lcd._pwm.start(50) 
+                    except:
+                        pass
                     self.lcd.bl_DutyCycle(50)
                     screen_is_on = True
 
@@ -267,11 +272,16 @@ class Display:
             except Empty:
                 # --- AUTO-SLEEP LOGIC ---
                 if screen_is_on:
+                    # --- FIX: Kill PWM completely to prevent faint glow ---
                     self.lcd.bl_DutyCycle(0)
+                    self.lcd._pwm.stop() 
+                    
                     # Force Draw BLACK to wipe video memory
                     w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                     black_img = Image.new("RGBA", (w, h), "BLACK")
                     self.lcd.ShowImage(black_img, 0, 0)
+                    
+                    logging.info("Display Entering Deep Sleep (PWM Stopped)")
                     screen_is_on = False
 
             except Exception as e:
