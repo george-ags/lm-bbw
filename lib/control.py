@@ -109,7 +109,6 @@ class ControlManager:
         """Checks if inactivity timeout is reached."""
         if timeout_seconds <= 0: return False 
         
-        # FIX: Reset activity timer continuously while Pump is ON
         if self.relay_on():
             self.last_activity_time = timer()
             return False
@@ -147,10 +146,12 @@ class ControlManager:
                         logging.debug("Background Scanner found: %s" % self.discovered_mac)
                         time.sleep(1) 
                     else:
-                        time.sleep(5) 
+                        # --- FIX: Increase sleep to 10s to prevent rapid DBus usage ---
+                        time.sleep(10) 
                 except Exception as e:
                     logging.error("Scanner Error: %s" % e)
-                    time.sleep(5)
+                    # --- FIX: Increase sleep to 10s on error ---
+                    time.sleep(10)
             else:
                 time.sleep(1)
 
@@ -186,9 +187,6 @@ class ControlManager:
         return self.relay.value
 
     def add_flow_rate_data(self, data_point: float):
-        # FIX: REMOVED register_activity() here. 
-        # Merely reading weight should not keep system awake.
-        
         if self.relay_on() or self.relay_off_time + 3.0 > timer():
             self.flow_rate_data.append(data_point)
             if len(self.flow_rate_data) > self.flow_rate_max_points:

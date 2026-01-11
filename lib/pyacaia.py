@@ -12,9 +12,10 @@
 #   Includes Heartbeat Loop to prevent disconnects.
 #   Includes Battery initialization to prevent blank screen.
 #   Includes "Double-Tap" Handshake.
-#   Includes "Connection Verification" (Auto-Restart if Battery=0).
+#   Includes "Connection Verification".
+#   Includes D-Bus Resource Leak Fix (Explicit Cleanup).
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 import logging
 import time
@@ -44,6 +45,7 @@ def find_acaia_devices(timeout=5) -> List[str]:
     """
     Synchronous wrapper for Bleak discovery with "Return Early" logic.
     Returns immediately when an ACAIA device is found, or waits for timeout.
+    Includes explicit cleanup to prevent D-Bus connection leaks.
     """
     logging.debug('Looking for ACAIA devices (Turbo Scan)...')
     
@@ -54,23 +56,29 @@ def find_acaia_devices(timeout=5) -> List[str]:
         stop_event = asyncio.Event()
 
         def detection_callback(device, advertisement_data):
-            # Check if this is an Acaia device
             if device.name and any(device.name.upper().startswith(name) for name in devices_start_names):
                 logging.info(f"Fast Scan Found: {device.name} [{device.address}]")
                 found_devs.append(device.address)
-                # Signal to stop scanning immediately
                 stop_event.set()
 
+        # --- FIX: Explicit Start/Stop with Cleanup Delay ---
+        scanner = BleakScanner(detection_callback=detection_callback)
         try:
-            # Start the scanner with the callback
-            async with BleakScanner(detection_callback=detection_callback):
-                try:
-                    # Wait for either the 'Found' event OR the timeout
-                    await asyncio.wait_for(stop_event.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    pass # Timeout reached, no device found yet
+            await scanner.start()
+            try:
+                # Wait for device or timeout
+                await asyncio.wait_for(stop_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass 
         except Exception as e:
             logging.error(f"Bleak Scan Error: {e}")
+        finally:
+            try:
+                await scanner.stop()
+                # CRITICAL: Small sleep to allow D-Bus to release the file descriptor
+                await asyncio.sleep(0.5) 
+            except Exception as e:
+                logging.error(f"Scanner Cleanup Error: {e}")
         
         return found_devs
 
