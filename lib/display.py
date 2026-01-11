@@ -234,6 +234,14 @@ class Display:
             img = Image.new("RGBA", (w, h), "BLACK")
             self.lcd.ShowImage(img, 0, 0)
             
+            # --- FIX: Force Backlight OFF immediately on start ---
+            try:
+                self.lcd.bl_DutyCycle(0)
+                self.lcd._pwm.stop()
+            except Exception as e:
+                logging.warning(f"Failed to kill backlight on init: {e}")
+            # ---------------------------------------------------
+            
             logging.info("Display Hardware Initialized (Clean Start)")
         except Exception as e:
             logging.error(f"Display Hardware Init Failed: {e}")
@@ -273,8 +281,11 @@ class Display:
                 # --- AUTO-SLEEP LOGIC ---
                 if screen_is_on:
                     # --- FIX: Kill PWM completely to prevent faint glow ---
-                    self.lcd.bl_DutyCycle(0)
-                    self.lcd._pwm.stop() 
+                    try:
+                        self.lcd.bl_DutyCycle(0)
+                        self.lcd._pwm.stop() 
+                    except:
+                        pass
                     
                     # Force Draw BLACK to wipe video memory
                     w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
