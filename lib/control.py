@@ -4,6 +4,8 @@ import pickle
 import time
 import copy
 import threading
+import os
+import sys
 from collections import deque
 from timeit import default_timer as timer
 from typing import Optional, Callable
@@ -144,13 +146,17 @@ class ControlManager:
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.debug("Background Scanner found: %s" % self.discovered_mac)
-                        # --- FIX: Finding a device resets the sleep timer ---
                         self.register_activity() 
-                        # --------------------------------------------------
                         time.sleep(1) 
                     else:
                         time.sleep(10) 
                 except Exception as e:
+                    # --- FIX: Auto-Restart on D-Bus Exhaustion ---
+                    err_str = str(e)
+                    if "AccessDenied" in err_str or "registered" in err_str:
+                        logging.fatal(f"CRITICAL: D-Bus Connection Limit Reached ({err_str}). Restarting Service...")
+                        os._exit(1) # Force Exit. Systemd will restart us clean.
+                    
                     logging.error("Scanner Error: %s" % e)
                     time.sleep(10)
             else:
@@ -274,9 +280,7 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
                 logging.info("Scale connected - Clearing old shot data")
                 mgr.flow_rate_data.clear()
                 
-                # --- FIX: Connection success resets the sleep timer ---
                 mgr.register_activity()
-                # ----------------------------------------------------
                 
                 if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
                     logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
