@@ -8,9 +8,9 @@ DISPLAY_ORIENTATION=landscape
 REFRESH_RATE=0.1
 
 # 1. How long to wait before sleeping (Seconds). For example: 600 = 10 mins.
-IDLE_TIMEOUT=300
+#IDLE_TIMEOUT=300
 
 # 2. How long to STOP scanning (Minutes) once sleep starts.
 # After this time, scanning restarts automatically.
 # Set to time which gives the scale plenty of time to turn off.
-SLEEP_PAUSE_MINUTES=6
+#SLEEP_PAUSE_MINUTES=6

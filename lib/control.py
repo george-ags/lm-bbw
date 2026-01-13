@@ -55,11 +55,6 @@ class ControlManager:
         self.image_needs_save = False
         self.running = True
         
-        # ACTIVITY TRACKING
-        self.last_activity_time = timer()
-        self.is_sleeping = False
-        self.sleep_start_time = 0 
-        
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
         self.scale_is_connected_flag = False 
@@ -70,21 +65,21 @@ class ControlManager:
 
         # TARGET BUTTONS
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_inc_button.when_released = lambda: self.register_activity() or self.__change_target(0.1)
-        self.tgt_inc_button.when_held = lambda: self.register_activity() or self.__change_target_held(1)
+        self.tgt_inc_button.when_released = lambda: self.__change_target(0.1)
+        self.tgt_inc_button.when_held = lambda: self.__change_target_held(1)
 
         self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_dec_button.when_released = lambda: self.register_activity() or self.__change_target(-0.1)
-        self.tgt_dec_button.when_held = lambda: self.register_activity() or self.__change_target_held(-1)
+        self.tgt_dec_button.when_released = lambda: self.__change_target(-0.1)
+        self.tgt_dec_button.when_held = lambda: self.__change_target_held(-1)
 
         # PADDLE SWITCH
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
-        self.paddle_switch.when_pressed = lambda: self.register_activity() or self.__start_shot()
+        self.paddle_switch.when_pressed = lambda: self.__start_shot()
         
         self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True) 
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
-        self.memory_button.when_pressed = lambda: self.register_activity() or self.__rotate_memory()
+        self.memory_button.when_pressed = lambda: self.__rotate_memory()
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
         self.tgt_button_was_held = False
@@ -98,30 +93,7 @@ class ControlManager:
         self.scan_thread.daemon = True
         self.scan_thread.start()
 
-    # --- ACTIVITY HELPERS ---
-    def register_activity(self):
-        """Updates timestamp and wakes system if sleeping."""
-        self.last_activity_time = timer()
-        if self.is_sleeping:
-            logging.info("Activity Detected -> Waking Up from Sleep Mode")
-            self.is_sleeping = False
-            self.discovered_mac = None 
-
-    def check_auto_sleep(self, timeout_seconds):
-        """Checks if inactivity timeout is reached."""
-        if timeout_seconds <= 0: return False 
-        
-        if self.relay_on():
-            self.last_activity_time = timer()
-            return False
-
-        if not self.is_sleeping and (timer() - self.last_activity_time > timeout_seconds):
-            logging.info(f"No activity for {timeout_seconds}s -> Sleep Mode Active (Scanner Paused)")
-            self.is_sleeping = True
-            self.sleep_start_time = timer()
-            return True
-        return False
-    # ------------------------
+    # REMOVED AUTO-SLEEP LOGIC FUNCTIONS
 
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
@@ -136,26 +108,25 @@ class ControlManager:
     def _bg_scan_loop(self):
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
-            if self.is_sleeping:
-                time.sleep(1)
-                continue
-
+            
+            # Continuous Scanning Logic
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
                     devices = pyacaia.find_acaia_devices(timeout=1)
                     if devices:
                         self.discovered_mac = devices[0]
                         logging.debug("Background Scanner found: %s" % self.discovered_mac)
-                        self.register_activity() 
                         time.sleep(1) 
                     else:
-                        time.sleep(10) 
+                        # Sleep 5s between scans to be gentle on CPU/Bluetooth
+                        time.sleep(5) 
                 except Exception as e:
-                    # --- FIX: Auto-Restart on D-Bus Exhaustion ---
+                    # --- SAFETY NET: AUTO-RESTART IF D-BUS IS DEAD ---
                     err_str = str(e)
-                    if "AccessDenied" in err_str or "registered" in err_str:
-                        logging.fatal(f"CRITICAL: D-Bus Connection Limit Reached ({err_str}). Restarting Service...")
-                        os._exit(1) # Force Exit. Systemd will restart us clean.
+                    if "AccessDenied" in err_str or "registered" in err_str or "Hello" in err_str:
+                        logging.fatal(f"CRITICAL: D-Bus Connection Limit Reached. Restarting Service... Error: {err_str}")
+                        os._exit(1) # Kill Process. Systemd will restart it.
+                    # -------------------------------------------------
                     
                     logging.error("Scanner Error: %s" % e)
                     time.sleep(10)
@@ -182,10 +153,7 @@ class ControlManager:
             self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
 
     def add_tare_handler(self, callback: Callable):
-        def wrapped_callback():
-            self.register_activity()
-            callback()
-        self.tare_button.when_pressed = wrapped_callback
+        self.tare_button.when_pressed = callback
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
@@ -255,13 +223,6 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
         mgr.scale_is_connected_flag = scale.connected
 
-        # DISCONNECT ON SLEEP
-        if mgr.is_sleeping:
-            if scale.connected:
-                logging.info("Sleep Mode Active -> Disconnecting Scale")
-                scale.disconnect()
-            return False
-
         if not mgr.should_scale_connect():
             if scale.connected:
                 logging.debug("Scale connect switch off, disconnecting")
@@ -279,8 +240,6 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
             if scale.connected:
                 logging.info("Scale connected - Clearing old shot data")
                 mgr.flow_rate_data.clear()
-                
-                mgr.register_activity()
                 
                 if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
                     logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")

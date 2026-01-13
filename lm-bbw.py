@@ -31,12 +31,6 @@ logPath = os.environ.get('LOGFILE', '/var/log/lm-bbw.log')
 refreshRate = float(os.environ.get('REFRESH_RATE', '0.1'))
 smoothing = round(1 / refreshRate)
 
-# --- CONFIGURATION ---
-idle_timeout = int(os.environ.get('IDLE_TIMEOUT', '900'))
-# Convert minutes to seconds
-sleep_pause_seconds = int(os.environ.get('SLEEP_PAUSE_MINUTES', '30')) * 60
-# ---------------------
-
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 stdout_handler.setLevel(logging.INFO)
 file_handler = handlers.TimedRotatingFileHandler(filename=logPath, when='midnight', backupCount=4)
@@ -114,17 +108,10 @@ def main():
     shot_started_with_scale = False
 
     while not stop:
-        # --- AUTO SLEEP/WAKE LOGIC ---
-        # 1. Check if we should go to sleep
-        mgr.check_auto_sleep(idle_timeout)
+        # --- REMOVED: Old Sleep/Wake Logic ---
+        # The system now scans continuously (with slow intervals).
+        # We rely on ControlManager's built-in "Suicide" protection for D-Bus leaks.
         
-        # 2. Check if we should wake up automatically after pause
-        if mgr.is_sleeping and sleep_pause_seconds > 0:
-            if (timer() - mgr.sleep_start_time) > sleep_pause_seconds:
-                logging.info("Sleep Pause Timeout Reached -> Auto-Waking System")
-                mgr.register_activity() # This resets sleeping=False and restarts scanner
-        # -----------------------------
-
         is_connected = control.try_connect_scale(scale, mgr)
         
         if is_connected and scale.mac and scale.mac != last_mac:
