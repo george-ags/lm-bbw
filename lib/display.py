@@ -13,19 +13,20 @@ from typing import Optional
 
 from PIL import Image, ImageFont, ImageDraw
 
-# Font Loading
+# --- FONT CONFIGURATION ---
 try:
     label_font = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 16)
     label_font_mid = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 20)
     label_font_lg = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 24)
     value_font = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 24)
-    # New Medium Font for Landscape Header (approx 20% smaller than 36)
+    # Medium Font for Landscape Header
     value_font_med = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 28) 
     value_font_lg = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 36)
     value_font_lg_bold = ImageFont.truetype("lib/font/Quicksand-Bold.ttf", 36)
 except Exception as e:
     logging.error(f"Error loading fonts: {e}")
 
+# --- COLORS ---
 bg_color = "BLACK"
 light_bg_color = "DIMGREY"
 fg_color = "WHITE"
@@ -57,24 +58,19 @@ def draw_battery(draw, xy, level, scale=1.0):
 
 # --- HELPER: Draw Paddle/Toggle Switch ---
 def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
-    """
-    Draws a toggle switch with dynamic color.
-    """
     x, y = xy
     w = int(36 * scale)
     h = int(18 * scale)
     padding = 2
     knob_dia = h - (padding * 2)
     
-    # Draw Track Outline
+    # Draw Track
     draw.rectangle((x, y, x + w, y + h), outline=fg_color, fill=bg_color, width=2)
 
     if is_on:
-        # ON: Fill track with color, knob is black (contrast)
         knob_color = color
         knob_x = x + padding
     else:
-        # OFF: Empty track, knob is outline or solid color
         knob_color = color
         knob_x = x + w - padding - knob_dia
 
@@ -82,11 +78,10 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     knob_y = y + padding
     draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color, outline=fg_color, width=1)
 
-# ---------------------------------------------
-
+# --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
     def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=8,
-                 width_pixels=240, height_pixels=160):
+                 width_pixels=240, height_pixels=160, avg_flow=None):
         self.flow_data = flow_data
         self.max_value = max_value
         self.series_color = series_color
@@ -94,6 +89,7 @@ class FlowGraph:
         self.line_color = line_color
         self.y_pix = height_pixels
         self.x_pix = width_pixels
+        self.avg_flow = avg_flow
         self.y_pix_interval = height_pixels / max_value
         if len(flow_data) > 0:
             self.x_pix_interval = width_pixels / len(flow_data)
@@ -123,9 +119,15 @@ class FlowGraph:
         draw.text((2, self.y_pix * .33), "4", self.label_color, label_font)
         draw.text((2, self.y_pix * .66), "2", self.label_color, label_font)
 
-        last_flow_rate = self.flow_data[-1] if len(self.flow_data) > 0 else 0
+        # Show Average if finished, otherwise Real-Time
+        if self.avg_flow is not None:
+            last_flow_rate = self.avg_flow
+            fmt_flow_label = "avg"
+        else:
+            last_flow_rate = self.flow_data[-1] if len(self.flow_data) > 0 else 0
+            fmt_flow_label = "g/s"
+
         fmt_flow = "{:0.1f}".format(last_flow_rate)
-        fmt_flow_label = "g/s"
         w = draw.textlength(fmt_flow, value_font)
         wl = draw.textlength(fmt_flow_label, label_font)
         draw.text(((self.x_pix - 4 - w - wl), (self.y_pix * .25) - value_font.size - 4), fmt_flow, fg_color, value_font)
@@ -136,6 +138,7 @@ class FlowGraph:
         draw.line((0, y, self.x_pix, y), fill=color, width=1)
 
 
+# --- CLASS: Data Container ---
 class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
@@ -173,6 +176,7 @@ class DisplayOrientation(str, Enum):
                     return member
         return None
 
+# --- CLASS: Hardware Controller ---
 class Display:
     def __init__(self, data_queue: Queue, display_size: DisplaySize = DisplaySize.SIZE_2_0, image_save_dir: str = None):
         self.data_queue: Queue[DisplayData] = data_queue
@@ -181,7 +185,6 @@ class Display:
         self.display_orientation = DisplayOrientation(os.environ.get('DISPLAY_ORIENTATION', DisplayOrientation.PORTRAIT))
         
         self.lcd = None
-        self.on = True
         self.process = None
 
     def start(self):
@@ -234,13 +237,12 @@ class Display:
             img = Image.new("RGBA", (w, h), "BLACK")
             self.lcd.ShowImage(img, 0, 0)
             
-            # --- FIX: Force Backlight OFF immediately on start ---
+            # --- Force Backlight OFF immediately on start ---
             try:
                 self.lcd.bl_DutyCycle(0)
                 self.lcd._pwm.stop()
             except Exception as e:
                 logging.warning(f"Failed to kill backlight on init: {e}")
-            # ---------------------------------------------------
             
             logging.info("Display Hardware Initialized (Clean Start)")
         except Exception as e:
@@ -256,7 +258,7 @@ class Display:
                 
                 # Wake up logic
                 if not screen_is_on:
-                    # --- FIX: Restart PWM explicitly when waking up ---
+                    # Restart PWM explicitly when waking up
                     try:
                         self.lcd._pwm.start(50) 
                     except:
@@ -280,7 +282,7 @@ class Display:
             except Empty:
                 # --- AUTO-SLEEP LOGIC ---
                 if screen_is_on:
-                    # --- FIX: Kill PWM completely to prevent faint glow ---
+                    # Kill PWM completely to prevent faint glow
                     try:
                         self.lcd.bl_DutyCycle(0)
                         self.lcd._pwm.stop() 
@@ -306,23 +308,20 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
     
     if is_landscape:
-        # Smaller header to fit graph + footer
         header_h = 60 
         col_w = 106
         graph_y = 60
-        ready_y = 110 # Adjusted for new layout
-        has_header_batt = False # Battery moved to footer
+        ready_y = 110 
+        has_header_batt = False 
         footer_line_y = height - 35
-        # Use slightly smaller font for Landscape Header
         header_val_font = value_font_med 
     else:
-        # Portrait Defaults
         header_h = 96
         col_w = 120
         graph_y = 98
         ready_y = 164
         has_header_batt = False
-        footer_line_y = 285 # Original Portrait logic (285 is effectively "Footer Start" on 320h)
+        footer_line_y = 285 
         header_val_font = value_font_lg
         
     background = bg_color
@@ -392,7 +391,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     # For Portrait, it's ~294
     
     if is_landscape:
-        footer_icon_y = footer_line_y + 11 # Vertically centered in 35px footer
+        footer_icon_y = footer_line_y + 11 
         footer_text_y = footer_line_y + 9
         
         # Right Side: Battery
@@ -443,27 +442,42 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     if data.flow_data is not None and len(data.flow_data) > 0:
         flow_rate_data = data.flow_rate_moving_avg()
         
+        # --- FIX: SMART AVERAGE (Start from First Drop) ---
+        final_avg_val = None
+        if not data.paddle_on and data.shot_time_elapsed > 0:
+            start_index = 0
+            threshold = 0.2
+            raw_flow = list(data.flow_data)
+            for i, val in enumerate(raw_flow):
+                if val > threshold:
+                    start_index = i
+                    break
+            
+            total_samples = len(raw_flow)
+            active_samples = total_samples - start_index
+            if active_samples > 0:
+                effective_duration = data.shot_time_elapsed * (active_samples / total_samples)
+                if effective_duration > 0.5:
+                    final_avg_val = data.weight / effective_duration
+        # --------------------------------------------------
+
         if is_landscape:
-            # Graph Height = Height (240) - Header (60) - Footer (35) = 145
             g_w, g_h = 320, 145 
-            # We don't draw the timer in the graph area anymore for landscape (it's in header)
-            # Just draw the graph
-            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val).generate_graph()
             img.paste(flow_image, (0, header_h))
             
             # Draw Time Axis Labels (bottom of graph area)
             last_sample_time = data.sample_rate * float(len(data.flow_data))
-            axis_y = footer_line_y - 20 # Sits just above footer line
+            axis_y = footer_line_y - 20 
             draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
             draw.text((width - 22, axis_y), "0s", fg_color, label_font)
             
         else:
-            # Portrait Graph
             g_w, g_h = 240, 160
             timer_y = 262
             timer_font = label_font
             
-            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h).generate_graph()
+            flow_image = FlowGraph(flow_rate_data, data.memory.color, width_pixels=g_w, height_pixels=g_h, avg_flow=final_avg_val).generate_graph()
             img.paste(flow_image, (0, graph_y))
             
             last_sample_time = data.sample_rate * float(len(data.flow_data))
