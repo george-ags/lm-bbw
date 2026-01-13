@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.6.4"
+__version__ = "0.6.6"
 
 import logging
 import time
 import threading
 import asyncio
-import gc  # Garbage Collector
+import gc
 from typing import Optional, List
 
 from bleak import BleakScanner, BleakClient
@@ -45,26 +45,29 @@ def find_acaia_devices(timeout=5) -> List[str]:
                 except asyncio.TimeoutError:
                     pass 
         except Exception as e:
+            err_str = str(e)
+            # --- FIX: CATCH ALL D-BUS CRASHES ---
+            # If the OS says "AccessDenied" OR "Hello", the Bluetooth stack is dead.
+            if "AccessDenied" in err_str or "Hello" in err_str or "registered" in err_str:
+                raise e 
             logging.error(f"Bleak Scan Error: {e}")
         
-        # --- AGGRESSIVE CLEANUP ---
         scanner = None
         gc.collect()
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
         
         return found_devs
 
     try:
         return asyncio.run(scan())
     except Exception as e:
+        # Re-raise critical errors to trigger Self-Healing
+        if "AccessDenied" in str(e) or "Hello" in str(e):
+            raise e
         logging.error(f"Scan runner failed: {e}")
         return []
 
-# ... [The rest of the file (Message, Settings, AcaiaScale class) remains exactly the same as previous versions] ...
-# (If you need the full content again let me know, but only the find_acaia_devices function changed)
-
-# ... [Paste the rest of the existing pyacaia.py content here] ...
-# To ensure you have the full file, I will paste the REST of pyacaia below for completeness:
+# --- Standard Classes (No Changes) ---
 
 class Message(object):
     def __init__(self, msgType, payload):
