@@ -19,7 +19,6 @@ try:
     label_font_mid = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 20)
     label_font_lg = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 24)
     value_font = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 24)
-    # Medium Font for Landscape Header
     value_font_med = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 28) 
     value_font_lg = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 36)
     value_font_lg_bold = ImageFont.truetype("lib/font/Quicksand-Bold.ttf", 36)
@@ -78,6 +77,38 @@ def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     knob_y = y + padding
     draw.ellipse((knob_x, knob_y, knob_x + knob_dia, knob_y + knob_dia), fill=knob_color, outline=fg_color, width=1)
 
+# --- HELPER: Calculate Smart Average ---
+def calculate_smart_average(data) -> Optional[float]:
+    """
+    Calculates average flow from the first drop (>0.2g/s) until the end.
+    """
+    if data.shot_time_elapsed <= 0:
+        return None
+        
+    start_index = 0
+    threshold = 0.2
+    
+    # Convert deque to list for indexing
+    raw_flow = list(data.flow_data)
+    
+    # Find start of flow
+    for i, val in enumerate(raw_flow):
+        if val > threshold:
+            start_index = i
+            break
+    
+    total_samples = len(raw_flow)
+    active_samples = total_samples - start_index
+    
+    if active_samples > 0:
+        # Effective Time = Total Time * (Active Samples / Total Samples)
+        effective_duration = data.shot_time_elapsed * (active_samples / total_samples)
+        
+        if effective_duration > 0.5:
+            return data.weight / effective_duration
+            
+    return None
+
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
     def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=8,
@@ -119,19 +150,20 @@ class FlowGraph:
         draw.text((2, self.y_pix * .33), "4", self.label_color, label_font)
         draw.text((2, self.y_pix * .66), "2", self.label_color, label_font)
 
-        # Show Average if finished, otherwise Real-Time
+        # Logic: If we have a frozen/sticky average, show "avg". Else "g/s"
         if self.avg_flow is not None:
-            last_flow_rate = self.avg_flow
-            fmt_flow_label = "avg"
+            display_val = self.avg_flow
+            label = "avg"
         else:
-            last_flow_rate = self.flow_data[-1] if len(self.flow_data) > 0 else 0
-            fmt_flow_label = "g/s"
+            # Fallback to real-time last value
+            display_val = self.flow_data[-1] if len(self.flow_data) > 0 else 0
+            label = "g/s"
 
-        fmt_flow = "{:0.1f}".format(last_flow_rate)
+        fmt_flow = "{:0.1f}".format(display_val)
         w = draw.textlength(fmt_flow, value_font)
-        wl = draw.textlength(fmt_flow_label, label_font)
+        wl = draw.textlength(label, label_font)
         draw.text(((self.x_pix - 4 - w - wl), (self.y_pix * .25) - value_font.size - 4), fmt_flow, fg_color, value_font)
-        draw.text(((self.x_pix - wl), (self.y_pix * .25) - label_font.size - 4), fmt_flow_label, fg_color, label_font)
+        draw.text(((self.x_pix - wl), (self.y_pix * .25) - label_font.size - 4), label, fg_color, label_font)
         return img
 
     def __draw_y_line(self, draw: ImageDraw, y, color):
@@ -186,6 +218,10 @@ class Display:
         
         self.lcd = None
         self.process = None
+        
+        # --- FIX: State for Sticky Average ---
+        self.last_paddle_state = False
+        self.frozen_avg = None
 
     def start(self):
         self.process = Process(target=self.__update_display)
@@ -256,7 +292,7 @@ class Display:
                 # Wait for data for 2 seconds. If none comes, raise Empty exception.
                 data = self.data_queue.get(timeout=2.0)
                 
-                # Wake up logic
+                # Wake Logic
                 if not screen_is_on:
                     # Restart PWM explicitly when waking up
                     try:
@@ -271,16 +307,29 @@ class Display:
                 if data.weight is None:
                     data.weight = 0.0
 
+                # --- FIX: Sticky Average Logic ---
+                # 1. Reset if new shot starts (OFF -> ON)
+                if data.paddle_on and not self.last_paddle_state:
+                    self.frozen_avg = None
+                
+                # 2. Latch Average if shot stops (ON -> OFF)
+                if not data.paddle_on and self.last_paddle_state:
+                    self.frozen_avg = calculate_smart_average(data)
+                
+                self.last_paddle_state = data.paddle_on
+                # ---------------------------------
+
                 w, h = (self.lcd.width, self.lcd.height) if self.display_orientation == DisplayOrientation.PORTRAIT else (self.lcd.height, self.lcd.width)
                 
-                img = draw_frame(w, h, data, self.display_orientation)
+                # Pass frozen_avg to draw_frame
+                img = draw_frame(w, h, data, self.display_orientation, self.frozen_avg)
 
                 if data.save_image and img is not None:
                     self.save_image(img)
                 self.lcd.ShowImage(img, 0, 0)
                 
             except Empty:
-                # --- AUTO-SLEEP LOGIC ---
+                # Sleep Logic
                 if screen_is_on:
                     # Kill PWM completely to prevent faint glow
                     try:
@@ -303,7 +352,7 @@ class Display:
                 time.sleep(1)
 
 
-def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation) -> Image:
+def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayOrientation, frozen_avg: float = None) -> Image:
     # --- 1. CONFIGURATION ---
     is_landscape = (orientation == DisplayOrientation.LANDSCAPE)
     
@@ -442,24 +491,8 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     if data.flow_data is not None and len(data.flow_data) > 0:
         flow_rate_data = data.flow_rate_moving_avg()
         
-        # --- FIX: SMART AVERAGE (Start from First Drop) ---
-        final_avg_val = None
-        if not data.paddle_on and data.shot_time_elapsed > 0:
-            start_index = 0
-            threshold = 0.2
-            raw_flow = list(data.flow_data)
-            for i, val in enumerate(raw_flow):
-                if val > threshold:
-                    start_index = i
-                    break
-            
-            total_samples = len(raw_flow)
-            active_samples = total_samples - start_index
-            if active_samples > 0:
-                effective_duration = data.shot_time_elapsed * (active_samples / total_samples)
-                if effective_duration > 0.5:
-                    final_avg_val = data.weight / effective_duration
-        # --------------------------------------------------
+        # Determine average value: Prefer sticky frozen val, else calculate on fly (rare)
+        final_avg_val = frozen_avg
 
         if is_landscape:
             g_w, g_h = 320, 145 
