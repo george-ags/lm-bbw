@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.6.6"
+__version__ = "0.6.7"
 
 import logging
 import time
@@ -24,7 +24,7 @@ def normalize_uuid(uuid_str):
     return uuid_str.lower().replace('-', '')
 
 def find_acaia_devices(timeout=5) -> List[str]:
-    logging.debug('Looking for ACAIA devices (Turbo Scan)...')
+    # logging.debug('Looking for ACAIA devices (Turbo Scan)...')
     
     devices_start_names = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
     
@@ -33,6 +33,9 @@ def find_acaia_devices(timeout=5) -> List[str]:
         stop_event = asyncio.Event()
 
         def detection_callback(device, advertisement_data):
+            # Stop processing if we already found it to reduce log spam
+            if stop_event.is_set(): return
+
             if device.name and any(device.name.upper().startswith(name) for name in devices_start_names):
                 logging.info(f"Fast Scan Found: {device.name} [{device.address}]")
                 found_devs.append(device.address)
@@ -45,13 +48,14 @@ def find_acaia_devices(timeout=5) -> List[str]:
                 except asyncio.TimeoutError:
                     pass 
         except Exception as e:
+            # If critical D-Bus error, pass it up to trigger restart
             err_str = str(e)
-            # --- FIX: CATCH ALL D-BUS CRASHES ---
-            # If the OS says "AccessDenied" OR "Hello", the Bluetooth stack is dead.
             if "AccessDenied" in err_str or "Hello" in err_str or "registered" in err_str:
                 raise e 
-            logging.error(f"Bleak Scan Error: {e}")
+            # Otherwise, just log it. We might have found the device anyway.
+            logging.warning(f"Bleak Scan Exception (Non-Critical): {e}")
         
+        # Cleanup - Force GC
         scanner = None
         gc.collect()
         await asyncio.sleep(0.5)
@@ -61,10 +65,11 @@ def find_acaia_devices(timeout=5) -> List[str]:
     try:
         return asyncio.run(scan())
     except Exception as e:
-        # Re-raise critical errors to trigger Self-Healing
+        # Re-raise critical errors
         if "AccessDenied" in str(e) or "Hello" in str(e):
             raise e
         logging.error(f"Scan runner failed: {e}")
+        # If we crashed but still have a list, return it? Hard to do here. Return empty.
         return []
 
 # --- Standard Classes (No Changes) ---

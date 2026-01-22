@@ -93,8 +93,6 @@ class ControlManager:
         self.scan_thread.daemon = True
         self.scan_thread.start()
 
-    # REMOVED AUTO-SLEEP LOGIC FUNCTIONS
-
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
         while self.running:
@@ -115,10 +113,9 @@ class ControlManager:
                     devices = pyacaia.find_acaia_devices(timeout=1)
                     if devices:
                         self.discovered_mac = devices[0]
-                        logging.debug("Background Scanner found: %s" % self.discovered_mac)
+                        logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
                         time.sleep(1) 
                     else:
-                        # Sleep 5s between scans to be gentle on CPU/Bluetooth
                         time.sleep(5) 
                 except Exception as e:
                     # --- SAFETY NET: AUTO-RESTART IF D-BUS IS DEAD ---
