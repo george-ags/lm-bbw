@@ -25,6 +25,23 @@ try:
 except Exception as e:
     logging.error(f"Error loading fonts: {e}")
 
+# --- LOGO CONFIGURATION ---
+IMG_DIR="/opt/lm-bbw/lib/img/"
+
+logo_img = None
+
+try:
+    logo_path = IMG_DIR + "lamarzocco.png"
+    if os.path.exists(logo_path):
+        raw_img = Image.open(logo_path).convert("RGBA")
+
+        resize_factor = 0.7
+        new_w = int(raw_img.width * resize_factor)
+        new_h = int(raw_img.height * resize_factor)
+        logo_img = raw_img.resize((new_w, new_h))
+except Exception as e:
+    logging.error(f"Error loading logo: {e}")
+
 # --- COLORS ---
 bg_color = "BLACK"
 light_bg_color = "DIMGREY"
@@ -231,7 +248,6 @@ class Display:
         self.lcd = None
         self.process = None
         
-        # --- FIX: State for Sticky Average ---
         self.last_paddle_state = False
         self.frozen_avg = None
 
@@ -436,8 +452,7 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         # Center in 3rd col (start ~212)
         draw.text(((col_w - w)/2 + (col_w * 2) + 2, (header_h + 12 - h) / 2), fmt_timer, fg_color, header_val_font)
     
-    # --- 4. FOOTER (Battery & Paddle) ---
-    # Determine Paddle Color/Text
+    # --- 4. FOOTER (Battery, Paddle, & Logo) ---
     p_text = ""
     if data.paddle_on:
         p_color = "BLUE" 
@@ -447,15 +462,11 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     fmt_batt = "%d%%" % data.battery
     w_batt_text = draw.textlength(fmt_batt, label_font)
     
-    # Calculate Footer Y Position
-    # For Landscape, footer starts at footer_line_y (~205) + padding
-    # For Portrait, it's ~294
-    
     if is_landscape:
         footer_icon_y = footer_line_y + 11 
         footer_text_y = footer_line_y + 9
         
-        # Right Side: Battery
+        # --- Right: Battery ---
         padding_right = 8
         icon_width = 27 
         batt_icon_x = width - padding_right - icon_width
@@ -464,11 +475,20 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         draw_battery(draw, (batt_icon_x, footer_icon_y), data.battery, scale=1.0)
         draw.text((batt_text_x, footer_text_y), fmt_batt, fg_color, label_font)
         
-        # Left Side: Paddle
+        # --- Left: Paddle ---
         paddle_icon_x = 8
         draw_paddle_switch(draw, (paddle_icon_x, footer_icon_y), data.paddle_on, color=p_color, scale=1.0)
-        draw.text((paddle_icon_x + 42, footer_text_y), p_text, p_color, label_font)
-        
+        # draw.text((paddle_icon_x + 42, footer_text_y), p_text, p_color, label_font)
+
+        # --- Center: Logo ---
+        if logo_img is not None:
+            # Center relative to entire screen width
+            footer_height = 35 
+            logo_x = int((width - logo_img.width) // 2)
+            logo_y = int(footer_line_y + (footer_height - logo_img.height) // 2)
+            
+            img.paste(logo_img, (logo_x, logo_y), logo_img)
+            
     else:
         # PORTRAIT FOOTER
         # Right Side: Battery
@@ -483,6 +503,13 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         # Left Side: Paddle
         draw_paddle_switch(draw, (8, 294), data.paddle_on, color=p_color, scale=1.0)
         draw.text((50, 294), p_text, p_color, label_font)
+        
+        # Center: Logo (Optional support for portrait)
+        if logo_img is not None:
+             # Basic centering for portrait footer (starts at 285, height 35)
+             logo_x = int((width - logo_img.width) // 2)
+             logo_y = int(285 + (35 - logo_img.height) // 2)
+             img.paste(logo_img, (logo_x, logo_y), logo_img)
 
     # --- 5. READY BOX ---
     fmt_ready = "Ready"
@@ -490,11 +517,6 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
     w = draw.textlength(fmt_ready, value_font_lg)
     h = value_font_lg.size + value_font_lg.size // 2
     center_x = width // 2
-    
-    # Don't draw ready box if shot is running and we have data (Graph mode)
-    # But current logic is to always draw it if not graph? No, original logic was specific.
-    # We will stick to drawing it if data says so or relying on layers.
-    # The original code drew it unconditionally at the specific Y.
     
     draw.rectangle((center_x - w / 2 - 4, ready_y, center_x + w / 2 + 4, ready_y + h), bg_color, data.memory.color, 4)
     draw.text((center_x - w / 2, ready_y), fmt_ready, fg_color, value_font_lg)
