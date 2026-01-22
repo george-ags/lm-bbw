@@ -112,7 +112,7 @@ def calculate_smart_average(data) -> Optional[float]:
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
     def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=8,
-                 width_pixels=240, height_pixels=160, avg_flow=None):
+                 width_pixels=240, height_pixels=160, avg_flow=None, grid_step=1):
         self.flow_data = flow_data
         self.max_value = max_value
         self.series_color = series_color
@@ -121,6 +121,7 @@ class FlowGraph:
         self.y_pix = height_pixels
         self.x_pix = width_pixels
         self.avg_flow = avg_flow
+        self.grid_step = grid_step
         self.y_pix_interval = height_pixels / max_value
         if len(flow_data) > 0:
             self.x_pix_interval = width_pixels / len(flow_data)
@@ -139,16 +140,27 @@ class FlowGraph:
         img = Image.new("RGBA", (self.x_pix, self.y_pix), "BLACK")
         draw = ImageDraw.Draw(img)
 
-        self.__draw_y_line(draw, 0, self.label_color)
-        self.__draw_y_line(draw, self.y_pix * .33 - 2, self.line_color)
-        self.__draw_y_line(draw, self.y_pix * .66 - 2, self.line_color)
-        self.__draw_y_line(draw, self.y_pix - 2, self.line_color)
+        # Draw a line for every 'grid_step' from 0 to max_value
+        for v in range(0, self.max_value + 1, self.grid_step):
+            # Calculate pixel Y position (inverted)
+            y_pos = self.y_pix - (v * self.y_pix_interval)
+            
+            # Adjust edges to keep lines visible
+            if v == 0: y_pos -= 1 
+            
+            # Determine Color (Top/Bottom = Bright, Middle = Dim)
+            color = self.line_color
+            if v == 0 or v == self.max_value:
+                color = self.label_color
+                
+            # Draw horizontal line
+            self.__draw_y_line(draw, y_pos, color)
+
+            # Draw Labels (Only Even numbers to avoid clutter)
+            if v > 0 and v < 8 and v % 2 == 0:
+                draw.text((2, y_pos - 8), str(v), self.label_color, label_font)
 
         draw.line(points, fill=self.series_color, width=2)
-
-        draw.text((2, 0), "6", self.label_color, label_font)
-        draw.text((2, self.y_pix * .33), "4", self.label_color, label_font)
-        draw.text((2, self.y_pix * .66), "2", self.label_color, label_font)
 
         # Logic: If we have a frozen/sticky average, show "avg". Else "g/s"
         if self.avg_flow is not None:
