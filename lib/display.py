@@ -16,6 +16,7 @@ from PIL import Image, ImageFont, ImageDraw
 # --- FONT CONFIGURATION ---
 try:
     label_font = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 16)
+    label_font_sml = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 12)
     label_font_mid = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 20)
     label_font_lg = ImageFont.truetype("lib/font/LiberationMono-Regular.ttf", 24)
     value_font = ImageFont.truetype("lib/font/Quicksand-Regular.ttf", 24)
@@ -75,8 +76,9 @@ def draw_battery(draw, xy, level, scale=1.0):
 # --- HELPER: Draw Paddle/Toggle Switch ---
 def draw_paddle_switch(draw, xy, is_on, color, scale=1.0):
     x, y = xy
-    w = int(36 * scale)
-    h = int(18 * scale)
+    y -= 1
+    w = int(32 * scale)
+    h = int(14 * scale)
     padding = 2
     knob_dia = h - (padding * 2)
     
@@ -174,7 +176,7 @@ class FlowGraph:
             self.__draw_y_line(draw, y_pos, color)
 
             # Draw Labels (Only Even numbers to avoid clutter)
-            if v > 0 and v < 8 and v % 2 == 0:
+            if v > 0 and v < self.max_value and v % 2 == 0:
                 draw.text((2, y_pos - 8), str(v), self.label_color, label_font)
 
         draw.line(points, fill=self.series_color, width=2)
@@ -203,7 +205,7 @@ class FlowGraph:
 class DisplayData:
     def __init__(self, weight: float, sample_rate: float, memory, flow_data: list, battery: int,
                  paddle_on: bool, shot_time_elapsed: float, save_image: bool = False,
-                 flow_smooth_factor: int = 8):
+                 flow_smooth_factor: int = 10):
         self.weight = weight
         self.sample_rate = sample_rate
         self.memory = memory
@@ -335,7 +337,7 @@ class Display:
                 if data.weight is None:
                     data.weight = 0.0
 
-                # --- FIX: Sticky Average Logic ---
+                # Sticky Average Logic:
                 # 1. Reset if new shot starts (OFF -> ON)
                 if data.paddle_on and not self.last_paddle_state:
                     self.frozen_avg = None
@@ -421,28 +423,28 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
 
     # --- 3. HEADER LABELS & VALUES ---
     # Common Offsets
-    lbl_x_1 = 10 if is_landscape else 16
-    lbl_x_2 = 118 if is_landscape else 130
+    lbl_x_1 = 24 if is_landscape else 30
+    lbl_x_2 = 120 if is_landscape else 140
     lbl_y = 8 if is_landscape else 16
     
     # Column 1: Weight
-    draw.text((lbl_x_1, lbl_y), "weight(g)", fg_color, label_font)
+    draw.text((lbl_x_1, lbl_y), "WEIGHT", fg_color, label_font)
     fmt_weight = "{:0.1f}".format(data.weight)
     w = draw.textlength(fmt_weight, header_val_font)
     h = header_val_font.size
     draw.text(((col_w - w) / 2, (header_h + 12 - h) / 2), fmt_weight, fg_color, header_val_font)
     
     # Column 2: Target
-    draw.text((lbl_x_2, lbl_y), "tgt %s(g)" % data.memory.name, fg_color, label_font)
+    draw.text((lbl_x_2, lbl_y), "TARGET %s" % data.memory.name, data.memory.color, label_font)
     fmt_target = "{:0.1f}".format(data.memory.target)
     # Use same font size for target
     w = draw.textlength(fmt_target, header_val_font)
-    draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, fg_color, header_val_font)
+    draw.text(((col_w - w) / 2 + col_w, (header_h + 12 - h) / 2), fmt_target, data.memory.color, header_val_font)
 
     # Column 3: Logic varies
     if is_landscape:
         # LANDSCAPE HEADER COL 3: BREW TIMER
-        timer_label = "timer"
+        timer_label = "TIMER"
         w_label = draw.textlength(timer_label, label_font)
         # Centered label: Use same offset logic as value
         draw.text(((col_w - w_label)/2 + (col_w * 2) + 2, 8), timer_label, fg_color, label_font)
@@ -498,11 +500,11 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
         batt_text_x = batt_icon_x - 4 - w_batt_text
         
         draw_battery(draw, (batt_icon_x, 296), data.battery, scale=1.0)
-        draw.text((batt_text_x, 294), fmt_batt, fg_color, label_font)
+        #draw.text((batt_text_x, 294), fmt_batt, fg_color, label_font)
         
         # Left Side: Paddle
         draw_paddle_switch(draw, (8, 294), data.paddle_on, color=p_color, scale=1.0)
-        draw.text((50, 294), p_text, p_color, label_font)
+        #draw.text((50, 294), p_text, p_color, label_font)
         
         # Center: Logo (Optional support for portrait)
         if logo_img is not None:
@@ -536,8 +538,9 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             # Draw Time Axis Labels (bottom of graph area)
             last_sample_time = data.sample_rate * float(len(data.flow_data))
             axis_y = footer_line_y - 20 
-            draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
-            draw.text((width - 22, axis_y), "0s", fg_color, label_font)
+            draw.text((4, axis_y), "-%ds" % math.ceil(last_sample_time), fg_color, label_font_sml)
+            draw.text((width / 2 - 22, axis_y), "-%ds" % math.ceil(last_sample_time / 2), fg_color, label_font_sml)
+            draw.text((width - 22, axis_y), "0s", fg_color, label_font_sml)
             
         else:
             g_w, g_h = 240, 160
@@ -549,8 +552,8 @@ def draw_frame(width: int, height: int, data: DisplayData, orientation: DisplayO
             
             last_sample_time = data.sample_rate * float(len(data.flow_data))
             axis_y = timer_y 
-            draw.text((4, axis_y), "%ds" % math.ceil(last_sample_time), fg_color, label_font)
-            draw.text((width - 22, axis_y), "0s", fg_color, label_font)
+            draw.text((4, axis_y), "-%ds" % math.ceil(last_sample_time), fg_color, label_font_sml)
+            draw.text((width - 22, axis_y), "0s", fg_color, label_font_sml)
 
             fmt_shot_time = "timer:{:0.1f}s".format(data.shot_time_elapsed)
             w = draw.textlength(fmt_shot_time, timer_font)
