@@ -108,9 +108,9 @@ def main():
     shot_started_with_scale = False
 
     while not stop:
-        # --- REMOVED: Old Sleep/Wake Logic ---
-        # The system now scans continuously (with slow intervals).
-        # We rely on ControlManager's built-in "Suicide" protection for D-Bus leaks.
+        # --- NEW: Check Auto-Sleep Status ---
+        mgr.check_auto_sleep(scale)
+        # ------------------------------------
         
         is_connected = control.try_connect_scale(scale, mgr)
         

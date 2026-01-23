@@ -55,6 +55,16 @@ class ControlManager:
         self.image_needs_save = False
         self.running = True
         
+        # --- AUTO-SLEEP CONFIG ---
+        self.idle_timeout = int(os.environ.get('IDLE_TIMEOUT', 300))
+        self.sleep_pause = int(os.environ.get('SLEEP_PAUSE', 360))
+        
+        self.last_activity = timer()
+        self.is_sleeping = False
+        self.sleep_end_time = 0.0
+        self.last_weight_check = 0.0
+        # -------------------------
+
         # ASYNC SCANNER VARIABLES
         self.discovered_mac: Optional[str] = None
         self.scale_is_connected_flag = False 
@@ -65,23 +75,25 @@ class ControlManager:
 
         # TARGET BUTTONS
         self.tgt_inc_button = Button(ControlManager.TGT_INC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_inc_button.when_released = lambda: self.__change_target(0.1)
-        self.tgt_inc_button.when_held = lambda: self.__change_target_held(1)
+        self.tgt_inc_button.when_released = lambda: (self._activity_detected(), self.__change_target(0.1))
+        self.tgt_inc_button.when_held = lambda: (self._activity_detected(), self.__change_target_held(1))
 
         self.tgt_dec_button = Button(ControlManager.TGT_DEC_GPIO, hold_time=0.5, hold_repeat=True, pull_up=True, bounce_time=0.02)
-        self.tgt_dec_button.when_released = lambda: self.__change_target(-0.1)
-        self.tgt_dec_button.when_held = lambda: self.__change_target_held(-1)
+        self.tgt_dec_button.when_released = lambda: (self._activity_detected(), self.__change_target(-0.1))
+        self.tgt_dec_button.when_held = lambda: (self._activity_detected(), self.__change_target_held(-1))
 
         # PADDLE SWITCH
         self.paddle_switch = Button(ControlManager.PADDLE_GPIO, pull_up=True, bounce_time=0.05)
-        self.paddle_switch.when_pressed = lambda: self.__start_shot()
+        self.paddle_switch.when_pressed = lambda: (self._activity_detected(), self.__start_shot())
         
         self.tare_button = Button(ControlManager.TARE_GPIO, pull_up=True) 
 
         self.memory_button = Button(ControlManager.MEM_GPIO, pull_up=True)
-        self.memory_button.when_pressed = lambda: self.__rotate_memory()
+        self.memory_button.when_pressed = lambda: (self._activity_detected(), self.__rotate_memory())
 
         self.scale_connect_button = Button(ControlManager.SCALE_CONNECT_GPIO, pull_up=True)
+        self.scale_connect_button.when_pressed = lambda: self._activity_detected()
+        
         self.tgt_button_was_held = False
 
         # START THREADS
@@ -92,6 +104,41 @@ class ControlManager:
         self.scan_thread = threading.Thread(target=self._bg_scan_loop)
         self.scan_thread.daemon = True
         self.scan_thread.start()
+
+    # --- AUTO-SLEEP LOGIC ---
+    def _activity_detected(self):
+        self.last_activity = timer()
+        if self.is_sleeping:
+            logging.info("Activity Detected -> Waking Up from Sleep Mode")
+            self.is_sleeping = False
+
+    def check_auto_sleep(self, scale: AcaiaScale):
+        now = timer()
+        
+        # Check for weight change (Activity)
+        if scale.connected:
+            if abs(scale.weight - self.last_weight_check) > 0.3: # 0.3g threshold for activity
+                self._activity_detected()
+            self.last_weight_check = scale.weight
+
+        # Logic: Enter Sleep
+        if not self.is_sleeping:
+            if (now - self.last_activity) > self.idle_timeout:
+                logging.info(f"No activity for {self.idle_timeout}s -> Sleep Mode Active (Scanner Paused)")
+                self.is_sleeping = True
+                self.sleep_end_time = now + self.sleep_pause
+                
+                # Disconnect scale if connected
+                if scale.connected:
+                    logging.info("Disconnecting scale for sleep...")
+                    scale.disconnect()
+
+        # Logic: Auto-Wake after pause
+        elif self.is_sleeping:
+            if now > self.sleep_end_time:
+                logging.info("Sleep Pause Timeout Reached -> Auto-Waking System")
+                self._activity_detected() # Resets flags and timers
+    # ------------------------
 
     def _watchdog_loop(self):
         logging.info("Paddle Watchdog Started")
@@ -107,7 +154,12 @@ class ControlManager:
         logging.info("Bluetooth Background Scanner Started")
         while self.running:
             
-            # Continuous Scanning Logic
+            # --- PAUSE SCANNING IF SLEEPING ---
+            if self.is_sleeping:
+                time.sleep(1)
+                continue
+            # ----------------------------------
+
             if self.should_scale_connect() and not self.scale_is_connected_flag and self.discovered_mac is None:
                 try:
                     devices = pyacaia.find_acaia_devices(timeout=1)
@@ -150,7 +202,8 @@ class ControlManager:
             self.memories = deque([TargetMemory("A"), TargetMemory("B", "#25a602"), TargetMemory("C", "#376efa")])
 
     def add_tare_handler(self, callback: Callable):
-        self.tare_button.when_pressed = callback
+        # Modified to trigger activity
+        self.tare_button.when_pressed = lambda: (self._activity_detected(), callback())
 
     def should_scale_connect(self) -> bool:
         return self.scale_connect_button.value
@@ -209,12 +262,14 @@ class ControlManager:
             return
         logging.info("Start shot")
         self.flow_rate_data = deque([])
-        if self.tare_button.when_pressed is not None:
-            self.tare_button.when_pressed()
-            logging.info("Sent tare to scale")
+        
+        # Tare Scale on start: trigger the same callback assigned to the physical Tare button
+        if self.tare_button.when_pressed:
+            logging.info("Auto-Taring Scale...")
+            self.tare_button.when_pressed() 
+        
         self.shot_timer_start = timer()
         self.relay.on()
-
 
 def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
