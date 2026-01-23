@@ -1,0 +1,7 @@
+#
+# Sample Crontab
+#
+
+0 3 * * 0 /home/pi/bin/cleanup_old_files.sh /opt/lm-bbw/web 60 7 > /home/pi/bin/logs/cleanup_old_files.log 2>&1
+
+
