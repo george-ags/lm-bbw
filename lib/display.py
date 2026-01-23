@@ -128,7 +128,7 @@ def calculate_smart_average(data) -> Optional[float]:
 
 # --- CLASS: Flow Graph Renderer ---
 class FlowGraph:
-    def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=8,
+    def __init__(self, flow_data: list, series_color="BLUE", label_color="#c7c7c7", line_color="#5a5a5a", max_value=5,
                  width_pixels=240, height_pixels=160, avg_flow=None, grid_step=1):
         self.flow_data = flow_data
         self.max_value = max_value
