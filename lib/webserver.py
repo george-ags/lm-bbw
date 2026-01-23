@@ -61,7 +61,8 @@ class GalleryHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         r.append(f'<h1>{title}</h1>')
         
         # Link to parent directory
-        r.append('<div class="nav"><a href="../">&larr; Back / Parent Directory</a></div>')
+        if displaypath != "/":
+            r.append('<div class="nav"><a href="../">&larr; Back / Parent Directory</a></div>')
         
         r.append('<div class="gallery">')
 
