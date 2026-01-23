@@ -1,78 +1,73 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "0.6.7"
+__version__ = "0.7.3-simplepyble-fixed"
 
 import logging
 import time
 import threading
-import asyncio
+import struct
 import gc
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
-from bleak import BleakScanner, BleakClient
+try:
+    import simplepyble
+except ImportError:
+    logging.fatal("SimplePyBLE not installed. Run: pip3 install simplepyble")
+    raise
 
 root = logging.getLogger()
 root.setLevel(logging.INFO)
 
 HEADER1 = 0xef
 HEADER2 = 0xdd
+# Acaia UUIDs
 OLD_CHAR_UUID = "00002a80-0000-1000-8000-00805f9b34fb"
 PYXIS_CMD_UUID = "49535343-8841-43f4-a8d4-ecbe34729bb3"
 
 def normalize_uuid(uuid_str):
     return uuid_str.lower().replace('-', '')
 
-def find_acaia_devices(timeout=5) -> List[str]:
-    # logging.debug('Looking for ACAIA devices (Turbo Scan)...')
+# --- SCANNING FUNCTION ---
+def find_acaia_devices(timeout=1) -> List[str]:
+    """
+    Scans for Acaia devices using SimplePyBLE.
+    Blocking call for 'timeout' seconds.
+    """
+    found_devs = []
+    target_names = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
     
-    devices_start_names = ['ACAIA', 'PYXIS', 'UMBRA', 'LUNAR', 'PROCH']
-    
-    async def scan():
-        found_devs = []
-        stop_event = asyncio.Event()
-
-        def detection_callback(device, advertisement_data):
-            # Stop processing if we already found it to reduce log spam
-            if stop_event.is_set(): return
-
-            if device.name and any(device.name.upper().startswith(name) for name in devices_start_names):
-                logging.info(f"Fast Scan Found: {device.name} [{device.address}]")
-                found_devs.append(device.address)
-                stop_event.set()
-
-        try:
-            async with BleakScanner(detection_callback=detection_callback) as scanner:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    pass 
-        except Exception as e:
-            # If critical D-Bus error, pass it up to trigger restart
-            err_str = str(e)
-            if "AccessDenied" in err_str or "Hello" in err_str or "registered" in err_str:
-                raise e 
-            # Otherwise, just log it. We might have found the device anyway.
-            logging.warning(f"Bleak Scan Exception (Non-Critical): {e}")
-        
-        # Cleanup - Force GC
-        scanner = None
-        gc.collect()
-        await asyncio.sleep(0.5)
-        
-        return found_devs
-
     try:
-        return asyncio.run(scan())
-    except Exception as e:
-        # Re-raise critical errors
-        if "AccessDenied" in str(e) or "Hello" in str(e):
-            raise e
-        logging.error(f"Scan runner failed: {e}")
-        # If we crashed but still have a list, return it? Hard to do here. Return empty.
-        return []
+        adapters = simplepyble.Adapter.get_adapters()
+        if not adapters:
+            logging.warning("No Bluetooth Adapters found")
+            return []
 
-# --- Standard Classes (No Changes) ---
+        adapter = adapters[0]
+        
+        # SimplePyBLE scan is blocking
+        adapter.scan_for(timeout * 1000) 
+        
+        peripherals = adapter.scan_get_results()
+        
+        for p in peripherals:
+            try:
+                name = p.identifier()
+                addr = p.address()
+                if name and any(name.upper().startswith(t) for t in target_names):
+                    logging.info(f"Scan Found: {name} [{addr}]")
+                    found_devs.append(addr)
+            except Exception:
+                continue
+                
+    except Exception as e:
+        if "InProgress" not in str(e):
+            logging.error(f"SimplePyBLE Scan Error: {e}")
+
+    return found_devs
+
+
+# --- PROTOCOL HELPERS (Unchanged) ---
 
 class Message(object):
     def __init__(self, msgType, payload):
@@ -109,7 +104,6 @@ class Message(object):
                 self.button = 'unknownbutton'
 
     def _decode_weight(self, payload: bytes) -> float:
-         import struct
          if len(payload) < 6: return 0.0
          unit = payload[4] & 0xFF
          scales = {1:10.0, 2:100.0, 3:1000.0, 4:10000.0}
@@ -189,9 +183,8 @@ def encodeId(isPyxisStyle=False):
     return encode(11, payload)
 def encodeHeartbeat(): return encode(0, [2, 0])
 def encodeTare(): return encode(4, [0])
-def encodeStartTimer(): return encode(13, [0, 0])
-def encodeStopTimer(): return encode(13, [0, 2])
-def encodeResetTimer(): return encode(13, [0, 1])
+
+# --- ACAIA SCALE CLASS (SimplePyBLE Port) ---
 
 class AcaiaScale(object):
     def __init__(self, mac=None):
@@ -200,116 +193,178 @@ class AcaiaScale(object):
         self.weight = 0.0
         self.battery = 0 
         self.units = 'grams'
-        self._loop = None
-        self._thread = None
-        self._client: Optional[BleakClient] = None
-        self.packet = bytearray()
-        self.char_uuid = None
+        
+        self.adapter = None 
+        self._peripheral = None
+        self._service_uuid = None
+        self._char_uuid = None
         self.isPyxisStyle = False
-        self._heartbeat_task = None 
-
-    def start_async_loop(self):
-        if self._loop is None:
-            self._loop = asyncio.new_event_loop()
-            self._thread = threading.Thread(target=self._run_loop, args=(self._loop,), daemon=True)
-            self._thread.start()
-            logging.info("Bleak background thread started")
-
-    def _run_loop(self, loop):
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
+        
+        # Threading for non-blocking operations
+        self._connect_thread = None
+        self._heartbeat_thread = None
+        self._stop_event = threading.Event()
+        
+        self.packet = bytearray()
 
     def connect(self):
+        """
+        Starts the connection process in a background thread.
+        Returns immediately (non-blocking).
+        """
         if self.connected: return
-        self.start_async_loop()
-        if not self.mac: return
-        future = asyncio.run_coroutine_threadsafe(self._connect_async(), self._loop)
-        try: future.result(timeout=12) 
-        except Exception as e:
-            logging.error(f"Bleak Connect Timeout/Error: {e}")
-            self.connected = False
+        
+        # Ensure only one connection thread runs
+        if self._connect_thread and self._connect_thread.is_alive():
+            return
 
-    def _on_disconnect(self, client):
-        logging.info("Bleak Client Disconnected (Callback)")
-        self.connected = False
-        self.packet = bytearray()
-        if self._heartbeat_task: self._heartbeat_task.cancel()
+        self._stop_event.clear()
+        self._connect_thread = threading.Thread(target=self._connect_sync, daemon=True)
+        self._connect_thread.start()
+        logging.info("Starting Connection Thread (SimplePyBLE)...")
 
-    async def _connect_async(self):
-        logging.info(f"Connecting to {self.mac}...")
-        self._client = BleakClient(self.mac, disconnected_callback=self._on_disconnect)
+    def _connect_sync(self):
+        """
+        Synchronous connection logic (running in background thread).
+        Includes retry logic for busy BlueZ adapters.
+        """
         try:
-            await self._client.connect()
-            if self._client.is_connected:
+            time.sleep(0.5)
+            adapters = simplepyble.Adapter.get_adapters()
+            if not adapters:
+                logging.error("No Bluetooth adapters found")
+                return
+            
+            self.adapter = adapters[0] 
+            
+            # Retry Loop for Scan
+            target = None
+            for attempt in range(3):
+                try:
+                    logging.info(f"Scanning to acquire peripheral {self.mac} (Attempt {attempt+1})...")
+                    self.adapter.scan_for(2000) 
+                    peripherals = self.adapter.scan_get_results()
+                    
+                    for p in peripherals:
+                        if p.address() == self.mac:
+                            target = p
+                            break
+                    
+                    if target: break 
+                        
+                except Exception as e:
+                    if "InProgress" in str(e):
+                        logging.warning("BlueZ busy, waiting...")
+                        time.sleep(1.0)
+                    else:
+                        logging.error(f"Scan Error: {e}")
+                        break
+            
+            if not target:
+                logging.warning(f"Device {self.mac} not found in scan.")
+                return
+
+            self._peripheral = target
+            logging.info(f"Connecting to {self.mac}...")
+            self._peripheral.connect()
+            
+            if self._peripheral.is_connected():
                 logging.info(f"Connected to {self.mac}")
                 self.connected = True
-                await self._setup_services()
-                await asyncio.sleep(1.0) 
-                await self._send_handshake()
-                self._heartbeat_task = self._loop.create_task(self._heartbeat_loop())
-                logging.info("Verifying Data Stream...")
-                await asyncio.sleep(2.0)
-                if self.battery == 0:
-                    logging.error("Handshake Failed. Disconnecting...")
-                    await self._client.disconnect() 
-                    return
-                logging.info(f"Connection Verified. Battery: {self.battery}%")
+                
+                # Small pause after connect to let MTU/Services settle
+                time.sleep(1.0)
+                
+                # Setup Services (Find correct UUIDs)
+                if self._setup_services():
+                    # Subscribe
+                    try:
+                        self._peripheral.notify(self._service_uuid, self._char_uuid, self._notification_handler)
+                        logging.info("Subscribed to notifications")
+                    except Exception as e:
+                        logging.error(f"Notify failed: {e}")
+
+                    # Handshake
+                    self._perform_handshake()
+                    
+                    # Start Heartbeat Loop
+                    self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+                    self._heartbeat_thread.start()
+                else:
+                    logging.error("Failed to find Acaia Service/Char UUIDs")
+                    self.disconnect()
             else:
-                logging.warning("Bleak client reports not connected")
-                self.connected = False
+                logging.error("Failed to connect.")
+
         except Exception as e:
-            logging.error(f"Connection Logic Error: {e}")
+            logging.error(f"Connection Error: {e}")
             self.connected = False
+            self._peripheral = None
 
-    async def _heartbeat_loop(self):
+    def _setup_services(self) -> bool:
+        try:
+            services = self._peripheral.services()
+            for service in services:
+                for char in service.characteristics():
+                    u_norm = normalize_uuid(char.uuid())
+                    if u_norm == normalize_uuid(PYXIS_CMD_UUID):
+                        self._service_uuid = service.uuid()
+                        self._char_uuid = char.uuid()
+                        self.isPyxisStyle = True
+                        logging.info("Detected Pyxis/Lunar 2021 Style")
+                        return True
+                    elif u_norm == normalize_uuid(OLD_CHAR_UUID):
+                        self._service_uuid = service.uuid()
+                        self._char_uuid = char.uuid()
+                        self.isPyxisStyle = False
+                        logging.info("Detected Old Style")
+                        return True
+        except Exception as e:
+            logging.error(f"Service Discovery Error: {e}")
+        return False
+
+    def _perform_handshake(self):
+        logging.info("Performing Handshake...")
+        # Acaia handshake sequence
+        self._write_sync(encodeId(self.isPyxisStyle))
+        time.sleep(0.5)
+        self._write_sync(encodeNotificationRequest())
+        time.sleep(0.5)
+        self._write_sync(encodeNotificationRequest())
+        time.sleep(0.5)
+        self._write_sync(encodeHeartbeat())
+        logging.info("Handshake Sent.")
+
+    def _heartbeat_loop(self):
         count = 0
-        try:
-            while self.connected:
-                await asyncio.sleep(3)
-                if self.connected:
-                    await self._write_async(encodeHeartbeat())
-                    count += 1
-                    if count >= 20:
-                        await self._write_async(encodeId(self.isPyxisStyle))
-                        await self._write_async(encodeNotificationRequest())
-                        count = 0
-        except asyncio.CancelledError: pass
-        except Exception: pass
+        
+        # Send one immediate heartbeat
+        self._write_sync(encodeHeartbeat())
+        
+        while self.connected and not self._stop_event.is_set():
+            try:
+                time.sleep(2.0)
+                
+                if not self.connected: break
+                
+                if self._peripheral and not self._peripheral.is_connected():
+                    logging.warning("SimplePyBLE reports disconnected during heartbeat.")
+                    self.disconnect()
+                    break
 
-    async def _setup_services(self):
-        self.char_uuid = OLD_CHAR_UUID 
-        self.isPyxisStyle = False
-        for service in self._client.services:
-            for char in service.characteristics:
-                uuid_norm = normalize_uuid(char.uuid)
-                if uuid_norm == normalize_uuid(PYXIS_CMD_UUID):
-                    self.char_uuid = char.uuid
-                    self.isPyxisStyle = True
-                    logging.info("Detected Pyxis/Lunar 2021 Style")
-                elif uuid_norm == normalize_uuid(OLD_CHAR_UUID):
-                    self.char_uuid = char.uuid
-                    self.isPyxisStyle = False
-                    logging.info("Detected Old Style")
-        try:
-            try: await self._client.stop_notify(self.char_uuid)
-            except: pass 
-            await self._client.start_notify(self.char_uuid, self._notification_handler)
-            logging.info(f"Subscribed to {self.char_uuid}")
-        except Exception as e: logging.error(f"Failed to subscribe to notifications: {e}")
+                self._write_sync(encodeHeartbeat())
+                count += 1
+                if count >= 10: 
+                    self._write_sync(encodeId(self.isPyxisStyle))
+                    self._write_sync(encodeNotificationRequest())
+                    count = 0
+            except Exception as e:
+                logging.error(f"Heartbeat Error: {e}")
+                self.disconnect()
+                break
 
-    async def _send_handshake(self):
-        logging.info("Performing Handshake (Double-Tap)...")
-        await self._write_async(encodeId(self.isPyxisStyle))
-        await asyncio.sleep(0.4) 
-        await self._write_async(encodeNotificationRequest())
-        await asyncio.sleep(0.5) 
-        await self._write_async(encodeNotificationRequest())
-        await asyncio.sleep(0.3)
-        await self._write_async(encodeHeartbeat())
-        logging.info("Handshake Complete")
-
-    def _notification_handler(self, sender, data):
-        self.addBuffer(data)
+    def _notification_handler(self, payload):
+        self.packet += payload
         while True:
             (msg, self.packet) = decode(self.packet)
             if not msg: break
@@ -321,18 +376,25 @@ class AcaiaScale(object):
             elif isinstance(msg, Message):
                 if msg.msgType == 5: self.weight = msg.value
 
-    def addBuffer(self, buffer2): self.packet += buffer2
+    def _write_sync(self, data):
+        if self.connected and self._peripheral:
+            try:
+                # --- FIX: Convert bytearray to bytes ---
+                self._peripheral.write_command(self._service_uuid, self._char_uuid, bytes(data))
+            except Exception as e:
+                logging.error(f"Write CMD failed: {e}")
+
     def disconnect(self):
+        logging.info("Disconnecting...")
         self.connected = False
-        if self._loop and self._client: asyncio.run_coroutine_threadsafe(self._disconnect_async(), self._loop)
-    async def _disconnect_async(self):
-        if self._client:
-            await self._client.disconnect()
-            logging.info("Disconnected (User Request)")
-    def _send_command(self, payload):
-        if self.connected and self._loop: asyncio.run_coroutine_threadsafe(self._write_async(payload), self._loop)
-    async def _write_async(self, data, with_response=False):
-        if self._client and self._client.is_connected:
-            try: await self._client.write_gatt_char(self.char_uuid, data, response=False)
-            except Exception: pass
-    def tare(self): self._send_command(encodeTare()); return True
+        self._stop_event.set()
+        
+        if self._peripheral:
+            try:
+                self._peripheral.disconnect()
+            except: pass
+            self._peripheral = None
+
+    def tare(self):
+        self._write_sync(encodeTare())
+        return True

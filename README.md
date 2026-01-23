@@ -194,7 +194,7 @@ sudo reboot
 
 ```commandline
 sudo apt install -y python3-pandas python3-pip libglib2.0-dev git
-sudo pip3 install bleak --break-system-packages
+sudo pip3 install simplepyble --break-system-packages
 ```
 
 #### LM-BBW Software Installation and Activation
