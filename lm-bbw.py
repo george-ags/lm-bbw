@@ -108,9 +108,8 @@ def main():
     shot_started_with_scale = False
 
     while not stop:
-        # --- NEW: Check Auto-Sleep Status ---
+        # Check Auto-Sleep Status
         mgr.check_auto_sleep(scale)
-        # ------------------------------------
         
         is_connected = control.try_connect_scale(scale, mgr)
         
@@ -143,6 +142,11 @@ def main():
             (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight)
         else:
             display.display_off()
+            # --- FIX: Reset timing variables on disconnect ---
+            last_sample_time = None
+            last_weight = None
+            # -------------------------------------------------
+            
         time.sleep(refreshRate)
         
     if scale.connected:
