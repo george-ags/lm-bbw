@@ -5,7 +5,7 @@ LOGLEVEL=INFO
 DISPLAY_ORIENTATION=landscape
 
 # Sets refresh rate of display, in seconds.
-REFRESH_RATE=0.1
+REFRESH_RATE=0.2
 
 # 1. How long to wait before sleeping (Seconds). For example: 600 = 10 mins.
 #IDLE_TIMEOUT=300
