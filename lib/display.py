@@ -175,8 +175,8 @@ class FlowGraph:
             # Draw horizontal line
             self.__draw_y_line(draw, y_pos, color)
 
-            # Draw Labels (Only Even numbers to avoid clutter)
-            if v > 0 and v < self.max_value and v % 2 == 0:
+            # Draw Labels (Only Even numbers if max_value > 5 to avoid clutter)
+            if v > 0 and v < self.max_value and (self.max_value < 6 or v % 2 == 0):
                 draw.text((2, y_pos - 8), str(v), self.label_color, label_font)
 
         draw.line(points, fill=self.series_color, width=2)
