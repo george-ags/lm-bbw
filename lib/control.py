@@ -287,16 +287,20 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
         if mgr.discovered_mac:
             logging.info("Main Thread connecting to found MAC: %s" % mgr.discovered_mac)
             scale.mac = mgr.discovered_mac
+            
+            # --- FIX: Clear Graph AND Timer immediately ---
+            logging.info("Clearing old shot data & timer (Preparing to Connect)")
+            mgr.flow_rate_data.clear()
+            mgr.shot_timer_start = None  # <--- Forces timer to 0.0s
+            
+            # Check for ghost relay state (Safety)
+            if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
+                logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
+                mgr.relay.off()
+            # ----------------------------------------------
+
             scale.connect()
             
-            if scale.connected:
-                logging.info("Scale connected - Clearing old shot data")
-                mgr.flow_rate_data.clear()
-                
-                if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
-                    logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
-                    mgr.relay.off()
-
             mgr.discovered_mac = None 
             return True
 
