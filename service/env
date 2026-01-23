@@ -4,8 +4,16 @@ LOGLEVEL=INFO
 # Sets display rendering in 'portrait' or 'landscape'
 DISPLAY_ORIENTATION=landscape
 
-# Sets refresh rate of display, in seconds.
-REFRESH_RATE=0.2
+# Main Loop Speed (Heartbeat) - Keep fast (0.1) for responsive buttons
+REFRESH_RATE=0.1
+
+# Graph History - Keep 60 seconds of data on screen
+GRAPH_HISTORY_SECONDS=60
+
+# Graph Smoothing - Lower is more responsive.
+# Controls how many data points are averaged for the line drawing (higher = smoother but more lag)
+# If commented out, it defaults to calculating based on refresh rate (approx 10)
+FLOW_SMOOTHING_FACTOR=20
 
 # 1. How long to wait before sleeping (Seconds). For example: 600 = 10 mins.
 IDLE_TIMEOUT=300

@@ -28,8 +28,23 @@ overshoot_update_executor = ThreadPoolExecutor(max_workers=1)
 logLevel = os.environ.get('LOGLEVEL', 'INFO').upper()
 logPath = os.environ.get('LOGFILE', '/var/log/lm-bbw.log')
 
+# --- CONFIGURATION SPLIT ---
+# 1. Main Loop Speed (Heartbeat)
 refreshRate = float(os.environ.get('REFRESH_RATE', '0.1'))
-smoothing = round(1 / refreshRate)
+
+# 2. Graph History Duration (in Seconds)
+# Default: 60 seconds. Increase this if you want a longer timeline on screen.
+graph_history_seconds = int(os.environ.get('GRAPH_HISTORY_SECONDS', '60'))
+
+# 3. Flow Smoothing Factor (Window Size)
+# Default: Calculate dynamically (1 second worth of samples).
+# Set 'FLOW_SMOOTHING_FACTOR=5' in env to override manually.
+smoothing_env = os.environ.get('FLOW_SMOOTHING_FACTOR')
+if smoothing_env:
+    smoothing = int(smoothing_env)
+else:
+    smoothing = round(1 / refreshRate)
+# ---------------------------
 
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 stdout_handler.setLevel(logging.INFO)
@@ -92,7 +107,12 @@ def main():
     display = Display(display_data_queue, display_size=DisplaySize.SIZE_2_0, image_save_dir=WEB_DIR)
     display.start()
 
-    mgr = ControlManager(max_flow_points=round(60 / refreshRate))
+    # --- UPDATED: Calculate points based on History Seconds ---
+    # e.g., 60 seconds / 0.1s rate = 600 points buffer
+    max_points = round(graph_history_seconds / refreshRate)
+    mgr = ControlManager(max_flow_points=max_points)
+    # ----------------------------------------------------------
+
     scale = AcaiaScale(mac='')
 
     last_mac = load_last_mac()
@@ -142,10 +162,9 @@ def main():
             (last_sample_time, last_weight) = update_display(scale, mgr, display, last_sample_time, last_weight)
         else:
             display.display_off()
-            # --- FIX: Reset timing variables on disconnect ---
+            # Reset timing variables on disconnect
             last_sample_time = None
             last_weight = None
-            # -------------------------------------------------
             
         time.sleep(refreshRate)
         
