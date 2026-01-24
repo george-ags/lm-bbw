@@ -337,6 +337,7 @@ class AcaiaScale(object):
 
     def _heartbeat_loop(self):
         count = 0
+        missed_packets = 0
         
         # Send one immediate heartbeat
         self._write_sync(encodeHeartbeat())
@@ -347,12 +348,20 @@ class AcaiaScale(object):
                 
                 if not self.connected: break
                 
-                if self._peripheral and not self._peripheral.is_connected():
-                    logging.warning("SimplePyBLE reports disconnected during heartbeat.")
+                # --- FIX: Trust 'Write' success over 'is_connected' flag ---
+                success = self._write_sync(encodeHeartbeat())
+                
+                if success:
+                    missed_packets = 0 # Reset counter on success
+                else:
+                    missed_packets += 1
+                    logging.warning(f"Heartbeat write failed ({missed_packets}/3)")
+                    
+                if missed_packets >= 3:
+                    logging.error("Too many failed heartbeats. Disconnecting.")
                     self.disconnect()
                     break
 
-                self._write_sync(encodeHeartbeat())
                 count += 1
                 if count >= 10: 
                     self._write_sync(encodeId(self.isPyxisStyle))
@@ -379,10 +388,12 @@ class AcaiaScale(object):
     def _write_sync(self, data):
         if self.connected and self._peripheral:
             try:
-                # --- FIX: Convert bytearray to bytes ---
                 self._peripheral.write_command(self._service_uuid, self._char_uuid, bytes(data))
+                return True # Success
             except Exception as e:
                 logging.error(f"Write CMD failed: {e}")
+                return False # Failed
+        return False
 
     def disconnect(self):
         logging.info("Disconnecting...")
