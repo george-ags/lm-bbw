@@ -122,7 +122,7 @@ class ControlManager:
             self.last_weight_check = scale.weight
 
         # Logic: Enter Sleep
-        if not self.is_sleeping:
+        if not self.is_sleeping and scale.connected:
             if (now - self.last_activity) > self.idle_timeout:
                 logging.info(f"No activity for {self.idle_timeout}s -> Sleep Mode Active (Scanner Paused)")
                 self.is_sleeping = True
