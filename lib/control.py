@@ -121,15 +121,14 @@ class ControlManager:
                 self._activity_detected()
             self.last_weight_check = scale.weight
 
-        # Logic: Enter Sleep
-        if not self.is_sleeping and scale.connected:
-            if (now - self.last_activity) > self.idle_timeout:
-                logging.info(f"No activity for {self.idle_timeout}s -> Sleep Mode Active (Scanner Paused)")
-                self.is_sleeping = True
-                self.sleep_end_time = now + self.sleep_pause
+            # Logic: Enter Sleep
+            if not self.is_sleeping:
+                if (now - self.last_activity) > self.idle_timeout:
+                    logging.info(f"No activity for {self.idle_timeout}s -> Sleep Mode Active (Scanner Paused)")
+                    self.is_sleeping = True
+                    self.sleep_end_time = now + self.sleep_pause
                 
-                # Disconnect scale if connected
-                if scale.connected:
+                    # Disconnect scale if connected
                     logging.info("Disconnecting scale for sleep...")
                     scale.disconnect()
 
@@ -286,18 +285,26 @@ def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
 
         if mgr.discovered_mac:
             logging.info("Main Thread connecting to found MAC: %s" % mgr.discovered_mac)
+            
+            # --- FIX 1: Reset Idle Timer immediately ---
+            # Prevents Auto-Sleep from killing the connection instantly
+            mgr._activity_detected() 
+            # -------------------------------------------
+
             scale.mac = mgr.discovered_mac
             
-            # --- FIX: Clear Graph AND Timer immediately ---
-            logging.info("Clearing old shot data & timer (Preparing to Connect)")
+            logging.info("Clearing old shot data (Preparing to Connect)")
             mgr.flow_rate_data.clear()
-            mgr.shot_timer_start = None  # <--- Forces timer to 0.0s
             
+            # --- FIX 2: Only reset timer if we are NOT mid-shot ---
+            if not mgr.relay_on():
+                mgr.shot_timer_start = None
+            # ------------------------------------------------------
+
             # Check for ghost relay state (Safety)
             if mgr.relay_on() and not mgr.paddle_switch.is_pressed:
                 logging.warning("Ghost Start detected during connection. Forcing Relay OFF.")
                 mgr.relay.off()
-            # ----------------------------------------------
 
             scale.connect()
             
