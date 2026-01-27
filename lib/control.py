@@ -167,7 +167,7 @@ class ControlManager:
                         logging.info("Scanner found Scale: %s (Handing over to Main Thread)" % self.discovered_mac)
                         time.sleep(1) 
                     else:
-                        time.sleep(5) 
+                        time.sleep(6)
                 except Exception as e:
                     # --- SAFETY NET: AUTO-RESTART IF D-BUS IS DEAD ---
                     err_str = str(e)
@@ -259,16 +259,22 @@ class ControlManager:
     def __start_shot(self):
         if self.relay_on():
             return
+            
         logging.info("Start shot")
         self.flow_rate_data = deque([])
         
-        # Tare Scale on start: trigger the same callback assigned to the physical Tare button
-        if self.tare_button.when_pressed:
-            logging.info("Auto-Taring Scale...")
-            self.tare_button.when_pressed() 
-        
+        # --- FIX: Priority to Relay (Coffee First) ---
         self.shot_timer_start = timer()
         self.relay.on()
+        # ---------------------------------------------
+        
+        # Then try to Tare (Best Effort)
+        try:
+            if self.tare_button.when_pressed:
+                logging.info("Auto-Taring Scale...")
+                self.tare_button.when_pressed()
+        except Exception as e:
+            logging.error(f"Auto-Tare failed (ignoring to keep shot running): {e}")
 
 def try_connect_scale(scale: AcaiaScale, mgr: ControlManager) -> bool:
     try:
